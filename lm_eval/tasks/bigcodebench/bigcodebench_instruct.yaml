@@ -1,0 +1,23 @@
+include: bigcodebench.yaml
+task: bigcodebench_instruct
+process_docs: !function utils.process_docs_instruct
+doc_to_text: !function utils.doc_to_text_instruct
+filter_list:
+  - name: "prepare_bcb_eval"
+    filter:
+      - function: "custom"
+        filter_fn: !function utils.build_predictions_instruct
+generation_kwargs:
+  until:
+    - "<|endoftext|>"
+    - "<|endofmask|>"
+    - "</s>"
+    - "\nif __name__"
+    - "\ndef main("
+    - "\nprint("
+    - "\n```\n"
+  max_gen_toks: 1280
+  do_sample: false
+  temperature: 0.0
+metadata:
+  version: 1.0

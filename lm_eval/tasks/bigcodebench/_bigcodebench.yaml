@@ -1,0 +1,10 @@
+group: bigcodebench_all
+task:
+  - bigcodebench
+  - bigcodebench_instruct
+  - bigcodebench_5
+aggregate_metric_list:
+  - metric: pass@1
+    weight_by_size: true
+metadata:
+  version: 1.0

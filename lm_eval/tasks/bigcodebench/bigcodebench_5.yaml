@@ -1,0 +1,28 @@
+include: bigcodebench.yaml
+task: bigcodebench_5
+repeats: 5
+metric_list:
+  - metric: !function utils.pass_at_k_bcb
+    aggregation: mean
+    higher_is_better: true
+    k: [1, 5]
+    calibrate_code: true
+generation_kwargs:
+  until:
+    - "<|endoftext|>"
+    - "<|endofmask|>"
+    - "</s>"
+    - "\nif __name__"
+    - "\ndef main("
+    - "\nprint("
+    - "\ndef "
+    - "\nclass "
+    - "\nimport "
+    - "\nfrom "
+    - "\nassert "
+  max_gen_toks: 1280
+  do_sample: true
+  temperature: 0.8
+  top_p: 0.95
+metadata:
+  version: 1.0

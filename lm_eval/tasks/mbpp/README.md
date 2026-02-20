@@ -29,6 +29,16 @@ Homepage: https://github.com/google-research/google-research/tree/master/mbpp
 
 - `mbpp`
 
+### Execution Backend
+
+MBPP uses the shared code-execution backend and supports:
+- `hf` (default), `subprocess`, or `remote`
+
+Set with:
+- `LMEVAL_CODE_EXEC_BACKEND=hf|subprocess|remote`
+- `LMEVAL_CODE_EXEC_API_URL=https://...` (for `remote`)
+- `LMEVAL_CODE_EXEC_API_KEY=...` (optional)
+
 ### Checklist
 
 For adding novel benchmarks/datasets to the library:

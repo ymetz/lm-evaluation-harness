@@ -1,0 +1,40 @@
+task: livecodebench
+dataset_path: livecodebench/code_generation_lite
+dataset_kwargs:
+  version_tag: release_v3
+unsafe_code: true
+output_type: generate_until
+test_split: test
+process_docs: !function utils.process_docs
+doc_to_text: query
+doc_to_target: !function utils.doc_to_target
+target_delimiter: ""
+metric_list:
+  - metric: !function utils.pass_at_k_livecodebench
+    aggregation: mean
+    higher_is_better: true
+    k: [1, 5, 10]
+    timeout: 6.0
+    n_exe_workers: 20
+generation_kwargs:
+  until:
+    - "<|endoftext|>"
+    - "<|endofmask|>"
+    - "</s>"
+    - "\nif __name__"
+    - "\ndef main("
+    - "\nprint("
+    - "\n```"
+  max_gen_toks: 2048
+  do_sample: true
+  temperature: 0.2
+  top_p: 0.95
+repeats: 10
+num_fewshot: 0
+filter_list:
+  - name: "prepare_livecodebench_eval"
+    filter:
+      - function: "custom"
+        filter_fn: !function utils.build_predictions
+metadata:
+  version: 1.0

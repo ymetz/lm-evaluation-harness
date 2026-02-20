@@ -1,26 +1,31 @@
-import evaluate as hf_evaluate
 import re
 
-try:
-    compute_ = hf_evaluate.load("code_eval")
-    test_cases = ["assert add(2, 3)==5"]
-    candidates = [["def add(a,b): return a*b"]]
-    results = compute_.compute(references=test_cases, predictions=candidates, k=[1])
-except Exception as e:
-    raise e
+from lm_eval.tasks.code_execution import compute_pass_at_k
 
 
-def pass_at_k(references: list[str], predictions: list[list[str]], k: list[int] = None):
-    global compute_
+def pass_at_k(
+    references: list[str],
+    predictions: list[list[str]],
+    k: int | list[int] | None = None,
+    backend: str | None = None,
+    timeout_sec: float = 10.0,
+    n_workers: int = 8,
+    api_url: str | None = None,
+    api_key: str | None = None,
+    request_timeout_sec: float = 120.0,
+):
     assert k is not None
-    if isinstance(k, int):
-        k = [k]
-    res = compute_.compute(
+    return compute_pass_at_k(
         references=references,
         predictions=predictions,
         k=k,
+        backend=backend,
+        timeout_sec=timeout_sec,
+        n_workers=n_workers,
+        api_url=api_url,
+        api_key=api_key,
+        request_timeout_sec=request_timeout_sec,
     )
-    return res[0]
 
 
 def build_predictions(resps: list[list[str]], docs: list[dict]) -> list[list[str]]:

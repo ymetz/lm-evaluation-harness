@@ -1,33 +1,36 @@
 import re
 from typing import Union
 
-import evaluate as hf_evaluate
-
-import re
-
-try:
-    pass_at_k = hf_evaluate.load("code_eval")
-
-    # run simple test to check code execution is enabled before model generation
-    test_cases = ["assert add(2, 3)==5"]
-    candidates = [["def add(a,b): return a*b"]]
-    results = pass_at_k.compute(references=test_cases, predictions=candidates, k=[1])
-except Exception as e:
-    raise e
+from lm_eval.tasks.code_execution import compute_pass_at_k
 
 
 def pass_at_1(
-    references: Union[str, list[str]], predictions: Union[str, list[list[str]]]
+    references: Union[str, list[str]],
+    predictions: Union[str, list[list[str]]],
+    backend: str | None = None,
+    timeout_sec: float = 10.0,
+    n_workers: int = 8,
+    api_url: str | None = None,
+    api_key: str | None = None,
+    request_timeout_sec: float = 120.0,
 ) -> float:
     if isinstance(references, str):
         references = [references]
-    if isinstance(predictions[0], str):
+    if isinstance(predictions, str):
+        predictions = [[predictions]]
+    elif isinstance(predictions[0], str):
         predictions = [[p] for p in predictions]
-    return pass_at_k.compute(
+    return compute_pass_at_k(
         references=references,
         predictions=predictions,
-        k=[1],
-    )[0]["pass@1"]
+        k=1,
+        backend=backend,
+        timeout_sec=timeout_sec,
+        n_workers=n_workers,
+        api_url=api_url,
+        api_key=api_key,
+        request_timeout_sec=request_timeout_sec,
+    )["pass@1"]
 
 
 def clean_text(text: str) -> str:

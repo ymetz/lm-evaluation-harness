@@ -35,6 +35,29 @@ Note: For instruct tuned models, we recommend the instruct variant. That uses a 
 - `humaneval_instruct`: pass@1 with config more appropriate for instruct models. (implementation taken from llama [evals](https://huggingface.co/datasets/meta-llama/Llama-3.1-8B-Instruct-evals/viewer/Llama-3.1-8B-Instruct-evals__human_eval__details?row=0))
 - `humaneval_64_instruct`: pass@64 variant
 
+### Execution Backend
+
+Code evaluation can run with one of three backends:
+- `hf` (default): `evaluate`'s `code_eval` metric.
+- `subprocess`: local Python subprocess execution.
+- `remote`: REST API execution service.
+
+You can switch globally with environment variables:
+- `LMEVAL_CODE_EXEC_BACKEND=hf|subprocess|remote`
+- `LMEVAL_CODE_EXEC_API_URL=https://...` (required for `remote`)
+- `LMEVAL_CODE_EXEC_API_KEY=...` (optional bearer token for `remote`)
+
+Or override in task YAML metric kwargs:
+```yaml
+metric_list:
+  - metric: !function utils.pass_at_k
+    aggregation: mean
+    higher_is_better: true
+    k: [1, 10]
+    backend: remote
+    api_url: https://your-code-exec-service/evaluate
+```
+
 ### Checklist
 
 For adding novel benchmarks/datasets to the library:

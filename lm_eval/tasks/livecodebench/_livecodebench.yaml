@@ -1,0 +1,9 @@
+group: livecodebench_all
+task:
+  - livecodebench
+  - livecodebench_1
+aggregate_metric_list:
+  - metric: pass@1
+    weight_by_size: true
+metadata:
+  version: 1.0
