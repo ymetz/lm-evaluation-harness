@@ -209,15 +209,29 @@ def is_equiv(x1: str, x2: str) -> bool:
 def get_unnormalized_answer(text: str) -> str:
     INVALID_ANSWER = "[invalidanswer]"
     end_seq = "I hope it is correct."
-    text += end_seq
     match = re.search(
         r"Final Answer: The final answer is(.*?). I hope it is correct.",
-        text,
+        # NB: end_seq is appended with a separating space. Concatenating it directly
+        # produces "...is 7.I hope it is correct.", and the pattern requires ". I hope",
+        # so the patch-up never fired for text ending on a bare period.
+        text + " " + end_seq,
     )
     if match:
         return match.group(1).strip()
-    else:
-        return INVALID_ANSWER
+
+    # Fall back to the model's own \boxed{...} (as used for the gold solution
+    # above): the few-shot examples in list_fewshot_samples() end each solution
+    # right after "Final Answer: The final answer is $X$." without the phrase, so
+    # a model mirroring that style may omit it entirely and the regex above never
+    # matches, even when $X$ is correct.
+    boxed = last_boxed_only_string(text)
+    if boxed is not None:
+        try:
+            return remove_boxed(boxed)
+        except (AssertionError, IndexError):
+            pass
+
+    return INVALID_ANSWER
 
 
 SUBSTITUTIONS = [
