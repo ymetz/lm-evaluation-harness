@@ -2,7 +2,7 @@ import logging
 import re
 import signal
 from importlib.metadata import version
-from typing import Dict, List, Optional
+from importlib.util import find_spec
 
 import datasets
 
@@ -11,11 +11,12 @@ eval_logger = logging.getLogger(__name__)
 
 
 try:
-    import antlr4
     import sympy
     from math_verify import parse, verify
     from sympy.parsing.latex import parse_latex
 
+    if find_spec("antlr4") is None:
+        raise ModuleNotFoundError("No module named 'antlr4'")
     assert version("antlr4-python3-runtime").startswith("4.11")
 except (ModuleNotFoundError, AssertionError) as e:
     raise type(e)(
@@ -77,10 +78,7 @@ def process_results(doc: dict, results: list[str]) -> dict[str, int]:
     unnormalized_answer = get_unnormalized_answer(candidates)
     answer = normalize_final_answer(unnormalized_answer)
 
-    if is_equiv(answer, doc["answer"]):
-        retval = 1
-    else:
-        retval = 0
+    retval = 1 if is_equiv(answer, doc["answer"]) else 0
 
     # math_verify
     _mvres = verify(
@@ -96,7 +94,7 @@ def process_results(doc: dict, results: list[str]) -> dict[str, int]:
     return res
 
 
-def last_boxed_only_string(string: str) -> Optional[str]:
+def last_boxed_only_string(string: str) -> str | None:
     idx = string.rfind("\\boxed")
     if "\\boxed " in string:
         return "\\boxed " + string.split("\\boxed ")[-1].split("$")[0]
@@ -118,10 +116,7 @@ def last_boxed_only_string(string: str) -> Optional[str]:
                 break
         i += 1
 
-    if right_brace_idx is None:
-        retval = None
-    else:
-        retval = string[idx : right_brace_idx + 1]
+    retval = None if right_brace_idx is None else string[idx : right_brace_idx + 1]
 
     return retval
 
@@ -180,10 +175,7 @@ def is_equiv(x1: str, x2: str) -> bool:
                 return False
 
             try:
-                if sympy.simplify(diff) == 0:
-                    return True
-                else:
-                    return False
+                return sympy.simplify(diff) == 0
             except ValueError:
                 eval_logger.debug(
                     f"Had some trouble simplifying when comparing {x1} and {x2}"
