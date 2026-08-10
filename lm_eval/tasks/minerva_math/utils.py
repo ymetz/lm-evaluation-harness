@@ -4,6 +4,7 @@ import signal
 from collections import Counter
 from functools import cache
 from importlib.metadata import version
+from importlib.util import find_spec
 
 import datasets
 
@@ -14,18 +15,18 @@ INVALID_ANSWER = "[invalidanswer]"
 
 
 try:
-    import antlr4  # noqa: F401
     import sympy
     from math_verify import parse, verify
     from sympy.parsing.latex import parse_latex
 
+    if find_spec("antlr4") is None:
+        raise ModuleNotFoundError("No module named 'antlr4'")
     assert version("antlr4-python3-runtime").startswith("4.11")
 except (ModuleNotFoundError, AssertionError) as e:
     raise type(e)(
         "`sympy`, `math_verify` and `antlr4-python3-runtime==4.11` are required for generating translation task prompt templates. "
         "Please install the required packages via pip install lm-eval[math] or pip install -e .[math]"
     ) from e
-
 
 # taken from
 # https://github.com/wellecks/lm-evaluation-harness/blob/master/lm_eval/tasks/minerva_math.py
@@ -80,10 +81,7 @@ def process_results(doc: dict, results: list[str]) -> dict[str, int]:
     unnormalized_answer = get_unnormalized_answer(candidates)
     answer = normalize_final_answer(unnormalized_answer)
 
-    if is_equiv(answer, doc["answer"]):
-        retval = 1
-    else:
-        retval = 0
+    retval = 1 if is_equiv(answer, doc["answer"]) else 0
 
     # math_verify
     _mvres = verify(
@@ -240,10 +238,7 @@ def last_boxed_only_string(string: str) -> str | None:
                 break
         i += 1
 
-    if right_brace_idx is None:
-        retval = None
-    else:
-        retval = string[idx : right_brace_idx + 1]
+    retval = None if right_brace_idx is None else string[idx : right_brace_idx + 1]
 
     return retval
 
@@ -319,16 +314,29 @@ def is_equiv(x1: str, x2: str) -> bool:
 
 
 def get_unnormalized_answer(text: str) -> str:
+    INVALID_ANSWER = "[invalidanswer]"
     end_seq = "I hope it is correct."
-    text += end_seq
     match = re.search(
         r"Final Answer: The final answer is(.*?). I hope it is correct.",
-        text,
+        # NB: end_seq is appended with a separating space. Concatenating it directly
+        # produces "...is 7.I hope it is correct.", and the pattern requires ". I hope",
+        # so the patch-up never fired for text ending on a bare period.
+        text + " " + end_seq,
     )
     if match:
         return match.group(1).strip()
-    else:
-        return INVALID_ANSWER
+
+    # Fall back to the model's own \boxed{...} (as used for the gold solution
+    # above): some completions never emit the "I hope it is correct." phrase at
+    # all, so the regex above never matches even when $X$ is correct.
+    boxed = last_boxed_only_string(text)
+    if boxed is not None:
+        try:
+            return remove_boxed(boxed)
+        except (AssertionError, IndexError):
+            pass
+
+    return INVALID_ANSWER
 
 
 SUBSTITUTIONS = [
