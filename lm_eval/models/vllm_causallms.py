@@ -214,6 +214,15 @@ class VLLM(TemplateLM):
         # truncation strategy for inputs exceeding max length
         self.truncation_side = truncation_side
         self.data_parallel_size = int(data_parallel_size)
+        if swap_space != 4:
+            # vLLM no longer accepts swap_space as a constructor argument (matches the
+            # resolution EleutherAI/lm-evaluation-harness applied upstream for the same
+            # deprecation). Only warn when a caller actually asked for a non-default value,
+            # since swap_space keeps its old default here and is otherwise always "set".
+            eval_logger.warning(
+                "swap_space is no longer supported by vLLM; ignoring the requested "
+                f"value ({swap_space})."
+            )
         if disable_flashinfer_allreduce_fusion:
             # Avoid FlashInfer's fused all-reduce/RMS workspace while retaining
             # vLLM's ordinary all-reduce and the rest of torch.compile.
@@ -234,7 +243,6 @@ class VLLM(TemplateLM):
             "tensor_parallel_size": int(tensor_parallel_size),
             "max_model_len": int(self._max_length) if self._max_length else None,
             "max_num_seqs": kwargs.get("max_num_seqs", max_batch_size),
-            "swap_space": int(swap_space),
             "quantization": quantization,
             "seed": int(seed),
             "enable_lora": bool(lora_local_path),
