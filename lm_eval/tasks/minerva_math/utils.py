@@ -28,6 +28,7 @@ except (ModuleNotFoundError, AssertionError) as e:
         "Please install the required packages via pip install lm-eval[math] or pip install -e .[math]"
     ) from e
 
+
 # taken from
 # https://github.com/wellecks/lm-evaluation-harness/blob/master/lm_eval/tasks/minerva_math.py
 def doc_to_text(doc: dict) -> str:
@@ -314,7 +315,6 @@ def is_equiv(x1: str, x2: str) -> bool:
 
 
 def get_unnormalized_answer(text: str) -> str:
-    INVALID_ANSWER = "[invalidanswer]"
     end_seq = "I hope it is correct."
     match = re.search(
         r"Final Answer: The final answer is(.*?). I hope it is correct.",
