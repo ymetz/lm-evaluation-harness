@@ -6,7 +6,7 @@ import logging
 import os
 from importlib.metadata import version
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import jinja2
 from more_itertools import distribute
@@ -66,7 +66,6 @@ if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
     from lm_eval.api.instance import Instance
-    from lm_eval.models.utils import GenKwargs
 
 eval_logger = logging.getLogger(__name__)
 
@@ -81,7 +80,7 @@ class VLLM(TemplateLM):
         pretrained: str,
         dtype: Literal["float16", "bfloat16", "float32", "auto"] = "auto",
         revision: str | None = None,
-        trust_remote_code: bool | None = False,
+        trust_remote_code: bool = False,
         tokenizer: str | None = None,
         tokenizer_mode: Literal["auto", "slow"] = "auto",
         tokenizer_revision: str | None = None,
@@ -90,13 +89,11 @@ class VLLM(TemplateLM):
         tensor_parallel_size: int = 1,
         quantization: str | None = None,
         max_gen_toks: int = 256,
-        swap_space: int = 4,
         batch_size: str | int = "auto",
         max_batch_size=None,
         max_length: int | None = None,
         max_model_len: int | None = None,
         seed: int = 1234,
-        gpu_memory_utilization: float = 0.9,
         data_parallel_size: int = 1,
         lora_local_path: str | None = None,
         # VLLM: enable thinking tags in the prompt. Chat-template argument only; it does
@@ -132,11 +129,20 @@ class VLLM(TemplateLM):
                 "attempted to use 'vllm' LM type, but package `vllm` is not installed. "
                 "Please install vllm via `pip install lm-eval[vllm]` or `pip install -e .[vllm]`"
             )
+        if "swap_space" in kwargs:
+            eval_logger.warning("swap_space is no longer supported by vLLM; ignoring.")
+            kwargs.pop("swap_space")
 
         assert max_length is None or max_model_len is None, (
             "Either max_length or max_model_len may be provided, but not both"
         )
-        kwargs.pop("device", None)
+        if "device" in kwargs:
+            eval_logger.warning(
+                "The `device` argument is ignored by the vLLM backend. To select "
+                "which GPU(s) vLLM can use, set the `CUDA_VISIBLE_DEVICES` "
+                "environment variable before running lm-eval."
+            )
+            kwargs.pop("device")
         self.think_end_token = think_end_token
         self.think_start_token = think_start_token
         self._max_length = max_model_len if max_model_len is not None else max_length
@@ -168,7 +174,6 @@ class VLLM(TemplateLM):
             kwargs["compilation_config"] = compilation_config
         self.model_args = {
             "model": pretrained,
-            "gpu_memory_utilization": float(gpu_memory_utilization),
             "revision": revision,
             "dtype": dtype,
             "tokenizer": tokenizer,
@@ -192,9 +197,8 @@ class VLLM(TemplateLM):
         if self.data_parallel_size <= 1:
             self.model = LLM(**self.model_args)  # type: ignore[invalid-argument-type]
         else:
-            # lm-eval owns data parallelism: each replica is an independent Ray
-            # actor. Do not enable vLLM's native offline DP, which vLLM rejects
-            # for dense models.
+            # note: DP is always dispatched through ray actors; the mp data-parallel
+            # path was dropped upstream for dense models.
             eval_logger.warning(
                 "You might experience occasional issues with model weight downloading when data_parallel is in use. To ensure stable performance, run with data_parallel_size=1 until the weights are downloaded and cached."
             )
@@ -243,9 +247,15 @@ class VLLM(TemplateLM):
             self.think_end_token,
         )
 
-        if (
-            parse_version(version("vllm")) >= parse_version("0.8.3")
-            and resolve_vllm_chat_template is not None
+        self.enable_thinking = enable_thinking
+
+        if enable_thinking and think_end_token is None:
+            raise ValueError(
+                f"Got {enable_thinking=}, but {think_end_token=}. think_end_token is required when using `enable_thinking=True`. Please provide it, and refer to https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/interface.md."
+            )
+
+        if parse_version(version("vllm")) >= parse_version("0.8.3") and hasattr(
+            self.tokenizer, "name_or_path"
         ):
             kwargs_resolve_hf_chat_template = {
                 "tokenizer": self.tokenizer,
@@ -316,7 +326,8 @@ class VLLM(TemplateLM):
         self.custom_prefix_token_id = prefix_token_id
         if prefix_token_id is not None:
             eval_logger.info(
-                f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}"
+                "Loglikelihood prefix token id used in evaluation: %s",
+                self.prefix_token_id,
             )
 
         self._max_gen_toks = max_gen_toks
@@ -344,7 +355,7 @@ class VLLM(TemplateLM):
         return self.tokenizer.eos_token_id
 
     @property
-    def max_length(self):
+    def max_length(self) -> int:
         if self._max_length:  # if max length manually set, return it
             return self._max_length
         if self.data_parallel_size <= 1:
@@ -370,9 +381,7 @@ class VLLM(TemplateLM):
         add_generation_prompt: bool = True,
         **kwargs,
     ) -> str:
-        """
-        Method to apply a chat template to a list of chat history between user and model.
-        """
+        """Method to apply a chat template to a list of chat history between user and model."""
         try:
             chat_templated = self.tokenizer.apply_chat_template(
                 chat_history,
@@ -425,12 +434,24 @@ class VLLM(TemplateLM):
             return []
 
         _string: list[str] = [string] if isinstance(string, str) else string
-        _bos_token = self.tokenizer.decode(self.prefix_token_id)
+        _bos_token = (
+            self.tokenizer.decode(self.prefix_token_id)
+            if self.prefix_token_id is not None
+            else None
+        )
 
         special_tokens_kwargs = {
             **kwargs,
             **_add_special_kwargs(add_special_tokens, self.add_bos_token),
         }
+        # MistralTokenizer.__call__ has a strict signature with no **kwargs and
+        # only accepts add_special_tokens/truncation/max_length, so skip the
+        # HF-only return_attention_mask optimization for it.
+        extra_call_kwargs = (
+            {"return_attention_mask": False}
+            if hasattr(self.tokenizer, "name_or_path")
+            else {}
+        )
 
         # this is to handle chat templates, which usually add bos token.
         # this handles a mixed case where some messages have bos token and some don't,
@@ -449,7 +470,7 @@ class VLLM(TemplateLM):
             enc_has = (
                 self.tokenizer(
                     strs_has,
-                    return_attention_mask=False,
+                    **extra_call_kwargs,
                     **kwargs_off,
                 ).input_ids
                 if strs_has
@@ -459,7 +480,7 @@ class VLLM(TemplateLM):
         enc_not = (
             self.tokenizer(
                 strs_not,
-                return_attention_mask=False,
+                **extra_call_kwargs,
                 **special_tokens_kwargs,
             ).input_ids
             if strs_not
@@ -492,9 +513,9 @@ class VLLM(TemplateLM):
         if self.data_parallel_size > 1:
             import ray
 
-            # Reserving GPUs on each actor makes Ray set CUDA_VISIBLE_DEVICES
-            # correctly. Each actor then runs one independent vLLM replica,
-            # optionally tensor-parallel across its reserved GPUs.
+            # num_gpus reserves GPUs per actor so ray sets CUDA_VISIBLE_DEVICES
+            # correctly; without it the inner LLM sees 0 devices and asserts
+            # in gpu_worker.init_device.
             @ray.remote(num_gpus=self.tensor_parallel_size)
             def dp_replica(
                 model_args: dict,
@@ -502,24 +523,25 @@ class VLLM(TemplateLM):
                 requests: list[list[int]],
                 lora_request: LoRARequest,
             ):
-                # The inner LLM must not use Ray itself: nested placement groups
-                # can deadlock under vLLM V1. Let vLLM choose its local executor.
+                # inner LLM must not itself use ray — nested placement groups
+                # deadlock on V1. Let vLLM auto-pick (uni for TP=1, mp for TP>1).
                 model_args = {
-                    key: value
-                    for key, value in model_args.items()
-                    if key != "distributed_executor_backend"
+                    k: v
+                    for k, v in model_args.items()
+                    if k != "distributed_executor_backend"
                 }
-                # Ray propagates the driver's environment. Leaked VLLM_DP_*
-                # values would make vLLM treat these independent dense replicas
-                # as native offline DP and reject them on vLLM 0.22+.
-                for key in (
+                # ray propagates driver env vars into actors. VLLM_DP_* can
+                # leak in from EngineArgs/chat-template resolution on the
+                # driver and make the inner LLM (DP=1) compute a nonzero
+                # DP-adjusted local_rank → AssertionError in gpu_worker.
+                for _k in (
                     "VLLM_DP_RANK",
                     "VLLM_DP_RANK_LOCAL",
                     "VLLM_DP_SIZE",
                     "VLLM_DP_MASTER_IP",
                     "VLLM_DP_MASTER_PORT",
                 ):
-                    os.environ.pop(key, None)
+                    os.environ.pop(_k, None)
                 llm = LLM(**model_args)
                 return llm.generate(
                     [TokensPrompt(prompt_token_ids=request) for request in requests],
@@ -551,6 +573,18 @@ class VLLM(TemplateLM):
                 lora_request=self.lora_request,
             )
             return outputs
+
+    def loglikelihood(
+        self, requests: list[Instance], disable_tqdm: bool = False
+    ) -> list[tuple[float, bool]]:
+        if self.enable_thinking:
+            task_names = {req.task_name for req in requests if req.task_name}
+            raise ValueError(
+                f"enable_thinking=True is not compatible with loglikelihood tasks. "
+                f"Please use generative tasks only when using `enable_thinking=True`. "
+                f"Triggered by task(s): {', '.join(sorted(task_names))}"
+            )
+        return super().loglikelihood(requests, disable_tqdm=disable_tqdm)
 
     def loglikelihood_rolling(
         self, requests: list[Instance], disable_tqdm: bool = False
@@ -668,14 +702,12 @@ class VLLM(TemplateLM):
             context, context_encoding = zip(*context_and_encoding, strict=True)
             context_encoding_truncated = []
             sampling_params = []
+            _cache_gen_kwargs = []
             for toks, gen_kwargs in zip(context_encoding, all_gen_kwargs, strict=True):
                 assert isinstance(gen_kwargs, dict), (
                     f"Expected `gen_kwargs` to be of type `dict` but got {type(gen_kwargs)}"
                 )
 
-                gen_kwargs = normalize_gen_kwargs(
-                    gen_kwargs, default_max_gen_toks=self.max_gen_toks
-                )
                 kwargs, until, max_gen_toks = self.modify_gen_kwargs(
                     gen_kwargs, eos=eos, default_max_gen_toks=self.max_gen_toks
                 )
@@ -691,8 +723,23 @@ class VLLM(TemplateLM):
                 )
                 context_encoding_truncated.append(toks)
 
-                sampling_params.append(
-                    SamplingParams(max_tokens=max_gen_toks, stop=until, **kwargs)
+                # When a reasoning model is active, task-level stop sequences
+                # (e.g. the fewshot delimiter "\n\n") should not go to vLLM —
+                # they often exist inside <think> blocks and cause it to truncate
+                # before any response is produced.  Only EOS should be passed
+                # to vLLM; task stops are applied in postprocess_generated_text
+                # after thinking content is stripped.
+                if self.think_end_token:
+                    eos_only = [s for s in until if s == eos]
+                    sampling_params.append(
+                        SamplingParams(max_tokens=max_gen_toks, stop=eos_only, **kwargs)
+                    )
+                else:
+                    sampling_params.append(
+                        SamplingParams(max_tokens=max_gen_toks, stop=until, **kwargs)
+                    )
+                _cache_gen_kwargs.append(
+                    kwargs | {"until": until, "max_gen_toks": max_gen_toks}
                 )
 
             # perform batched generation
@@ -703,7 +750,9 @@ class VLLM(TemplateLM):
             )
 
             # cache generations
-            for output, _context in zip(cont, context, strict=True):
+            for output, _context, _gen_kwargs in zip(
+                cont, context, _cache_gen_kwargs, strict=True
+            ):
                 generated_text: str = output.outputs[0].text
                 # Per-response length + current-turn thinking-format (format-first, so
                 # the thinking span is measured only for well-formed responses).
@@ -720,11 +769,11 @@ class VLLM(TemplateLM):
                 )
                 # use secondary stop seqs to cut off should-have-been-stopped content post-hoc
                 generated_text = postprocess_generated_text(
-                    generated_text, until, self.think_end_token
+                    generated_text, _gen_kwargs.get("until"), self.think_end_token
                 )
                 res.append(generated_text)
                 self.cache_hook.add_partial(
-                    "generate_until", (_context, gen_kwargs), generated_text
+                    "generate_until", (_context, _gen_kwargs), generated_text
                 )
                 pbar.update(1)
 
@@ -764,7 +813,9 @@ class VLLM(TemplateLM):
             for _, context_enc, continuation_enc in chunk:
                 if (full_length := len(context_enc + continuation_enc)) > max_cxt_len:
                     eval_logger.warning(
-                        f"Context length {full_length} exceeds max length ({max_cxt_len}). Truncating context."
+                        "Context length %s exceeds max length (%s). Truncating context.",
+                        full_length,
+                        max_cxt_len,
                     )
                 inp = (context_enc + continuation_enc)[-max_cxt_len:]
                 ctxlen = len(context_enc) - max(
@@ -812,7 +863,6 @@ class VLLM(TemplateLM):
             is_greedy: bool
                 Whether argmax matches given continuation exactly
         """
-
         # The first entry of prompt_logprobs is None because the model has no previous tokens to condition on.
         continuation_logprobs_dicts = outputs.prompt_logprobs
 
@@ -861,10 +911,10 @@ class VLLM(TemplateLM):
 
     @staticmethod
     def modify_gen_kwargs(
-        gen_kwargs: GenKwargs,
+        gen_kwargs: dict[str, Any],
         eos: str | list[str] | None = None,
         default_max_gen_toks: int = 256,
-    ) -> tuple[dict, list[str], int]:
+    ) -> tuple[dict[str, Any], list[str], int]:
         """Process generation kwargs into vLLM-compatible format.
 
         Args:
@@ -878,22 +928,23 @@ class VLLM(TemplateLM):
             - stop_sequences: List of stop sequences including EOS
             - max_gen_toks: Maximum tokens to generate
         """
-        kwargs = {**copy.deepcopy(gen_kwargs)}
+        _gen_kwargs = normalize_gen_kwargs(
+            gen_kwargs, default_max_gen_toks=default_max_gen_toks
+        )
 
         # Extract and process stop sequences
         until = handle_stop_sequences(
-            kwargs.pop("until", None), eos=eos[0] if isinstance(eos, list) else eos
+            _gen_kwargs.pop("until", None), eos=eos[0] if isinstance(eos, list) else eos
         )
 
         # Extract max_tokens
-        max_gen_toks = int(kwargs.pop("max_gen_toks", default_max_gen_toks))
+        max_gen_toks = int(_gen_kwargs.pop("max_gen_toks", default_max_gen_toks))
 
         # do_sample and temperature normalization is handled by `normalize_gen_kwargs` utility
-        kwargs.pop("do_sample", None)
+        _gen_kwargs.pop("do_sample", None)
         # HF defaults
-        kwargs["skip_special_tokens"] = kwargs.get("skip_special_tokens", False)
-        kwargs["spaces_between_special_tokens"] = kwargs.get(
-            "spaces_between_special_tokens", False
-        )
-
-        return kwargs, until, max_gen_toks
+        _gen_kwargs = {
+            "skip_special_tokens": False,
+            "spaces_between_special_tokens": False,
+        } | _gen_kwargs
+        return _gen_kwargs, until, max_gen_toks
