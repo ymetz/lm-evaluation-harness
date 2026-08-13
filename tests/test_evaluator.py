@@ -115,7 +115,9 @@ def test_evaluator(
     ],
     ids=lambda d: f"{d}",
 )
-def test_printed_results(task_name: list[str], limit: int, model: str, model_args: str):
+def test_printed_results(
+    task_name: list[str], limit: int, model: str, model_args: str, on_ci: bool
+):
     results = evaluator.simple_evaluate(
         model=model,
         tasks=task_name,
@@ -155,14 +157,10 @@ def test_printed_results(task_name: list[str], limit: int, model: str, model_arg
                 if metric_name in {"perplexity", "word_perplexity", "byte_perplexity"}:
                     assert isclose(t1_item_f, t2_item_f, rel_tol=0.8, abs_tol=0.0)
                 else:
-                    assert abs(t1_item_f - t2_item_f) < 0.3
-            except ValueError:
-                assert t1_item == t2_item
-                ## TODO: these are pretty loose tolerances but:
-                # - we only test 10 samples
-                # - not sure when/how the ground truth test_data was generated
-                tol = 0.3 if on_ci else 0.5
-                assert abs(t1_item_f - t2_item_f) < tol
+                    # These are deliberately loose: the test evaluates only 10 samples
+                    # and the original reference-data provenance is not fully known.
+                    tol = 0.3 if on_ci else 0.5
+                    assert abs(t1_item_f - t2_item_f) < tol
             except ValueError:
                 # Strip whitespace so column-width differences
                 # (caused by value precision changes) don't fail the test.
@@ -177,71 +175,62 @@ def test_printed_results(task_name: list[str], limit: int, model: str, model_arg
 # System-prompt authority check: per-task "check inactive" warning
 # (the probe itself is OFF by default; tasks opt in via metadata).
 # ---------------------------------------------------------------------------
-def _fake_task_output(name, *, requires):
+def _fake_task(*, requires):
     metadata = (
         {"requires_system_prompt_authority": True} if requires else {"version": 1}
     )
-    return SimpleNamespace(
-        task_name=name, task=SimpleNamespace(config=SimpleNamespace(metadata=metadata))
-    )
+    return SimpleNamespace(config=SimpleNamespace(metadata=metadata))
 
 
-def test_sysprompt_warn_when_task_requires_and_check_inactive(monkeypatch, caplog):
-    monkeypatch.setattr(
-        evaluator,
-        "get_task_list",
-        lambda td: [_fake_task_output("realguardrails_s_ifeval", requires=True)],
-    )
+def test_sysprompt_warn_when_task_requires_and_check_inactive(caplog):
     lm = SimpleNamespace(system_prompt_authority_handled=False)
     with caplog.at_level("WARNING"):
-        needy = evaluator._warn_if_system_prompt_authority_inactive(lm, {})
+        needy = evaluator._warn_if_system_prompt_authority_inactive(
+            lm, {"realguardrails_s_ifeval": _fake_task(requires=True)}
+        )
     assert needy == ["realguardrails_s_ifeval"]
     assert any("authoritative system prompt" in r.message for r in caplog.records)
 
 
-def test_sysprompt_no_warn_when_model_handled(monkeypatch):
-    monkeypatch.setattr(
-        evaluator,
-        "get_task_list",
-        lambda td: [_fake_task_output("realguardrails_s_ifeval", requires=True)],
-    )
+def test_sysprompt_no_warn_when_model_handled():
     # handled=True (e.g. strip/allow/check passed) -> no warning
     lm = SimpleNamespace(system_prompt_authority_handled=True)
-    assert evaluator._warn_if_system_prompt_authority_inactive(lm, {}) == []
-
-
-def test_sysprompt_no_warn_when_task_does_not_require(monkeypatch):
-    monkeypatch.setattr(
-        evaluator,
-        "get_task_list",
-        lambda td: [_fake_task_output("hellaswag", requires=False)],
+    assert (
+        evaluator._warn_if_system_prompt_authority_inactive(
+            lm, {"realguardrails_s_ifeval": _fake_task(requires=True)}
+        )
+        == []
     )
+
+
+def test_sysprompt_no_warn_when_task_does_not_require():
     lm = SimpleNamespace(system_prompt_authority_handled=False)
-    assert evaluator._warn_if_system_prompt_authority_inactive(lm, {}) == []
-
-
-def test_sysprompt_no_warn_when_backend_lacks_attr(monkeypatch):
-    monkeypatch.setattr(
-        evaluator,
-        "get_task_list",
-        lambda td: [_fake_task_output("realguardrails_s_ifeval", requires=True)],
+    assert (
+        evaluator._warn_if_system_prompt_authority_inactive(
+            lm, {"hellaswag": _fake_task(requires=False)}
+        )
+        == []
     )
+
+
+def test_sysprompt_no_warn_when_backend_lacks_attr():
     lm = SimpleNamespace()  # e.g. API backend without the concept
-    assert evaluator._warn_if_system_prompt_authority_inactive(lm, {}) == []
-
-
-def test_sysprompt_returns_only_requiring_tasks_in_mixed_list(monkeypatch):
-    # Mixed run: only the task that requests authority should be flagged.
-    monkeypatch.setattr(
-        evaluator,
-        "get_task_list",
-        lambda td: [
-            _fake_task_output("hellaswag", requires=False),
-            _fake_task_output("realguardrails_tensortrust_extraction", requires=True),
-            _fake_task_output("arc_easy", requires=False),
-        ],
+    assert (
+        evaluator._warn_if_system_prompt_authority_inactive(
+            lm, {"realguardrails_s_ifeval": _fake_task(requires=True)}
+        )
+        == []
     )
+
+
+def test_sysprompt_returns_only_requiring_tasks_in_mixed_list():
+    # Mixed run: only the task that requests authority should be flagged.
     lm = SimpleNamespace(system_prompt_authority_handled=False)
-    assert evaluator._warn_if_system_prompt_authority_inactive(lm, {}) == [
-        "realguardrails_tensortrust_extraction"
-    ]
+    assert evaluator._warn_if_system_prompt_authority_inactive(
+        lm,
+        {
+            "hellaswag": _fake_task(requires=False),
+            "realguardrails_tensortrust_extraction": _fake_task(requires=True),
+            "arc_easy": _fake_task(requires=False),
+        },
+    ) == ["realguardrails_tensortrust_extraction"]

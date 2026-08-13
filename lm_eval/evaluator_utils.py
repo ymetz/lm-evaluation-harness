@@ -34,6 +34,61 @@ class ResultAcc(TypedDict):
     logged_samples: list[Any]
 
 
+THINKING_FORMAT_PREFIX = "thinking_format_"
+RESPONSE_LENGTH_PREFIX = "response_length_"
+THINKING_LENGTH_PREFIX = "thinking_length_"
+
+
+def promote_generation_info_metrics(
+    result_acc: ResultAcc, include_length: bool = False
+) -> None:
+    """Promote backend generation metadata into upstream's raw metric accumulator.
+
+    Backends attach one metadata dictionary per generated response to
+    ``Instance.length_info``. Values are first averaged per document and then flow
+    through the normal aggregation, group, logger, and distributed-result paths.
+    Thinking-format flags are always promoted when present; response/thinking lengths
+    are opt-in.
+
+    Standard requests may contain extra responses from distributed padding, so their
+    metadata is capped at ``Instance.repeats``. Multi-turn placeholders deliberately
+    contain one entry per generated turn and must not be capped that way.
+    """
+    task = result_acc["task"]
+
+    def _numeric(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    def _is_promoted(key: str) -> bool:
+        if key.startswith(THINKING_FORMAT_PREFIX):
+            return True
+        return include_length and key.startswith(
+            (RESPONSE_LENGTH_PREFIX, THINKING_LENGTH_PREFIX)
+        )
+
+    def _response_infos(instance: Any) -> list[dict]:
+        infos = getattr(instance, "length_info", None) or []
+        if getattr(task, "OUTPUT_TYPE", None) != "multi_turn_generate":
+            repeats = getattr(instance, "repeats", None)
+            if isinstance(repeats, int) and repeats > 0:
+                infos = infos[:repeats]
+        return [info for info in infos if isinstance(info, dict)]
+
+    instances_by_doc: dict[Any, list[Any]] = {}
+    for instance in getattr(task, "instances", []):
+        instances_by_doc.setdefault(instance.doc_id, []).append(instance)
+
+    for instances in instances_by_doc.values():
+        values_by_key: dict[str, list[float]] = {}
+        for instance in instances:
+            for info in _response_infos(instance):
+                for key, value in info.items():
+                    if _is_promoted(key) and _numeric(value):
+                        values_by_key.setdefault(key, []).append(float(value))
+        for key, values in values_by_key.items():
+            result_acc["raw_metrics"].setdefault((key, "none"), []).append(mean(values))
+
+
 def print_writeout(task: Task) -> None:
     for inst in task.instances:
         # print the prompt for the first few documents
@@ -201,7 +256,10 @@ def _compute_task_aggregations(
 
         metric_key = f"{metric},{filter_key}"
         agg_metrics[metric_key] = agg_fn(items)
-        sample_len = len(items)  # TODO: reflects only the last metric's count
+        # Promoted generation metrics can be sparse (for example, thinking length
+        # exists only for well-formed reasoning). Preserve the task's largest sample
+        # count instead of letting the last metric silently undercount group weights.
+        sample_len = max(sample_len, len(items))
 
         if isinstance(bootstrap_iters, int) and bootstrap_iters > 0:
             stderr_fn = stderr_for_metric(

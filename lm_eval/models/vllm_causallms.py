@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import copy
 import logging
 import os
 from importlib.metadata import version
@@ -150,19 +149,17 @@ class VLLM(TemplateLM):
         # truncation strategy for inputs exceeding max length
         self.truncation_side = truncation_side
         self.data_parallel_size = int(data_parallel_size)
+        if self.data_parallel_size > 1 and kwargs.get("enable_expert_parallel", False):
+            raise ValueError(
+                "data_parallel_size > 1 is not supported with enable_expert_parallel=True. "
+                "lm-eval dispatches data parallelism through independent Ray workers, "
+                "which does not provide a single coordinated MoE expert-parallel engine. "
+                "Use tensor_parallel_size > 1 with data_parallel_size=1 instead."
+            )
         if self.data_parallel_size > 1 and not find_spec("ray"):
             raise ModuleNotFoundError(
                 "ray is required for data parallelism. Please install ray using "
                 "`pip install ray`."
-            )
-        if swap_space != 4:
-            # vLLM no longer accepts swap_space as a constructor argument (matches the
-            # resolution EleutherAI/lm-evaluation-harness applied upstream for the same
-            # deprecation). Only warn when a caller actually asked for a non-default value,
-            # since swap_space keeps its old default here and is otherwise always "set".
-            eval_logger.warning(
-                "swap_space is no longer supported by vLLM; ignoring the requested "
-                f"value ({swap_space})."
             )
         if disable_flashinfer_allreduce_fusion:
             # Avoid FlashInfer's fused all-reduce/RMS workspace while retaining
@@ -247,15 +244,9 @@ class VLLM(TemplateLM):
             self.think_end_token,
         )
 
-        self.enable_thinking = enable_thinking
-
-        if enable_thinking and think_end_token is None:
-            raise ValueError(
-                f"Got {enable_thinking=}, but {think_end_token=}. think_end_token is required when using `enable_thinking=True`. Please provide it, and refer to https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/interface.md."
-            )
-
-        if parse_version(version("vllm")) >= parse_version("0.8.3") and hasattr(
-            self.tokenizer, "name_or_path"
+        if (
+            parse_version(version("vllm")) >= parse_version("0.8.3")
+            and resolve_vllm_chat_template is not None
         ):
             kwargs_resolve_hf_chat_template = {
                 "tokenizer": self.tokenizer,

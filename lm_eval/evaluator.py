@@ -9,13 +9,13 @@ import random
 import time
 from collections import defaultdict
 from copy import deepcopy
-from typing import TYPE_CHECKING
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
 import lm_eval.api.model
 import lm_eval.api.registry
+from lm_eval.api.instance import Instance
 from lm_eval.caching.cache import delete_cache
 from lm_eval.defaults import DEFAULT_OTHER_SEED, DEFAULT_RANDOM_SEED, LMEVAL_HASHMM
 from lm_eval.evaluator_utils import (
@@ -68,7 +68,7 @@ def _init_multiturn_state(task, doc, ctx, gen_kwargs, multiturn_kwargs):
 
 def run_multi_turn_rollout(
     lm: LM,
-    eval_tasks,
+    eval_tasks: dict[str, Task],
     requests: list,
     apply_chat_template: bool = False,
     chat_template=None,
@@ -88,16 +88,13 @@ def run_multi_turn_rollout(
             "evaluation. Please run with world_size=1."
         )
 
-    task_by_name = {
-        task_output.task_name: task_output.task for task_output in eval_tasks
-    }
     multiturn_kwargs = {
         "apply_chat_template": apply_chat_template,
         "chat_template": chat_template,
     }
     episodes = []
     for instance in requests:
-        task = task_by_name[instance.task_name]
+        task = eval_tasks[instance.task_name]
         ctx, gen_kwargs = instance.arguments
         for _ in range(instance.repeats):
             episodes.append(
@@ -154,6 +151,7 @@ def run_multi_turn_rollout(
         responses = lm.generate_until(wave_requests)
         for response, (episode, request) in zip(responses, active, strict=True):
             request.resps.append(response)
+            episode["instance"].length_info.extend(request.length_info)
             episode["task"].multiturn_consume_response(episode["state"], response)
             episode["step"] += 1
     else:
@@ -173,7 +171,9 @@ def run_multi_turn_rollout(
         )
 
 
-def _warn_if_system_prompt_authority_inactive(lm, task_dict) -> list[str]:
+def _warn_if_system_prompt_authority_inactive(
+    lm: LM, eval_tasks: dict[str, Task]
+) -> list[str]:
     """Warn when a task needs an authoritative system prompt but the model's
     system-prompt authority check was not activated (it is OFF by default).
 
@@ -187,14 +187,13 @@ def _warn_if_system_prompt_authority_inactive(lm, task_dict) -> list[str]:
     if getattr(lm, "system_prompt_authority_handled", True):
         return []
     needy = []
-    for to in get_task_list(task_dict):
-        # Group placeholders can carry a falsy/None task; read defensively.
-        cfg = getattr(getattr(to, "task", None), "config", None)
+    for task_name, task in eval_tasks.items():
+        cfg = getattr(task, "config", None)
         metadata = getattr(cfg, "metadata", None)
         if isinstance(metadata, dict) and metadata.get(
             "requires_system_prompt_authority"
         ):
-            needy.append(to.task_name)
+            needy.append(task_name)
     if needy:
         eval_logger.warning(
             "Task(s) %s expect an authoritative system prompt, but the "
@@ -467,9 +466,12 @@ def simple_evaluate(
     # Log selected tasks with hierarchy
     _log_selected_tasks(loaded["tasks"], loaded["groups"], task_manager)
 
-    # Apply config overrides to tasks
+    # Apply config overrides to the flat task mapping returned by TaskManager.load().
     for task_name, task_obj in loaded["tasks"].items():
-        if task_obj.get_config("output_type") == "generate_until":
+        if task_obj.get_config("output_type") in (
+            "generate_until",
+            "multi_turn_generate",
+        ):
             if gen_kwargs is not None:
                 task_obj.set_config(
                     key="generation_kwargs", value=gen_kwargs, update=True
@@ -493,60 +495,21 @@ def simple_evaluate(
                     f"num_fewshot has been set to 0 for {task_name} in its config. Manual configuration will be ignored."
                 )
             else:
-                if task_obj.get_config("output_type") in (
-                    "generate_until",
-                    "multi_turn_generate",
-                ):
-                    # multi_turn_generate also issues generate_until calls per
-                    # turn (see run_multi_turn_rollout), reading the task's
-                    # generation_kwargs — so the CLI override must reach it too,
-                    # e.g. `--gen_kwargs until=<|im_end|>` to add a stop token.
-                    if gen_kwargs is not None:
-                        task_obj.set_config(
-                            key="generation_kwargs", value=gen_kwargs, update=True
-                        )
-                    eval_logger.info(
-                        f"{task_obj.config.task}: Using gen_kwargs: {task_obj.config.generation_kwargs}"
-                    )
-
-                if predict_only:
-                    eval_logger.info(
-                        f"Processing {task_name} in output-only mode. Metrics will not be calculated!"
-                    )
-                    # we have to change the class properties post-hoc. This is pretty hacky.
-                    task_obj.override_metric(metric_name="bypass")
-
-                # override tasks' fewshot values to the provided num_fewshot arg value
-                # except if tasks have it set to 0 manually in their configs--then we should never overwrite that
-                if num_fewshot is not None:
-                    if (default_num_fewshot := task_obj.get_config("num_fewshot")) == 0:
-                        eval_logger.info(
-                            f"num_fewshot has been set to 0 for {task_name} in its config. Manual configuration will be ignored."
-                        )
-                    else:
-                        eval_logger.warning(
-                            f"Overwriting default num_fewshot of {task_name} from {default_num_fewshot} to {num_fewshot}"
-                        )
-                        task_obj.set_config(key="num_fewshot", value=num_fewshot)
-                else:
-                    # if num_fewshot not provided, and the task does not define a default one, default to 0
-                    if (
-                        default_num_fewshot := task_obj.get_config("num_fewshot")
-                    ) is None:
-                        task_obj.set_config(key="num_fewshot", value=0)
-                # fewshot_random_seed set for tasks, even with a default num_fewshot (e.g. in the YAML file)
-                task_obj.set_fewshot_seed(seed=fewshot_random_seed)
-
-                adjusted_task_dict[task_name] = task_obj
-
-        return adjusted_task_dict
-
-    task_dict = _adjust_config(task_dict)
+                eval_logger.warning(
+                    f"Overwriting default num_fewshot of {task_name} from {default_num_fewshot} to {num_fewshot}"
+                )
+                task_obj.set_config(key="num_fewshot", value=num_fewshot)
+        else:
+            # if num_fewshot not provided, and the task does not define a default one, default to 0
+            if (default_num_fewshot := task_obj.get_config("num_fewshot")) is None:
+                task_obj.set_config(key="num_fewshot", value=0)
+        # fewshot_random_seed set for tasks, even with a default num_fewshot (e.g. in the YAML file)
+        task_obj.set_fewshot_seed(seed=fewshot_random_seed)
 
     # Rank 0 only — `simple_evaluate` runs on every rank under accelerate/DDP,
     # so guard to avoid one identical warning per process.
     if getattr(lm, "rank", 0) == 0:
-        _warn_if_system_prompt_authority_inactive(lm, task_dict)
+        _warn_if_system_prompt_authority_inactive(lm, loaded["tasks"])
 
     if check_integrity:
         run_task_tests(task_list=tasks)
@@ -836,8 +799,8 @@ def evaluate(
     WORLD_SIZE = lm.world_size
     ### Postprocess outputs ###
     # TODO: del model here, maybe (idea: allow user to specify device of e.g. reward model separately)
-    for task_output, limit in zip(eval_tasks, limits, strict=True):
-        task = task_output.task
+    for (task_name, acc), limit in zip(eval_results_acc.items(), limits, strict=True):
+        task = acc["task"]
 
         # Skip post-processing for ranks with no instances (data parallel with
         # small datasets, or multi_turn_generate when world_size > docs-for-task,
@@ -906,10 +869,10 @@ def evaluate(
                 for metric, value in metrics.items():
                     acc["raw_metrics"][(metric, filter_key)].append(value)
 
-    # Promote per-response generation-info into sample_metrics (per rank, before the
-    # gather below; independent of log_samples). See promote_generation_info_metrics.
-    for task_output in eval_tasks:
-        promote_generation_info_metrics(task_output, include_length=log_length_metrics)
+    # Promote per-response generation info into the upstream ResultAcc before the
+    # distributed gather. This is independent of sample logging.
+    for acc in eval_results_acc.values():
+        promote_generation_info_metrics(acc, include_length=log_length_metrics)
 
     if WORLD_SIZE > 1:
         # Gather all sample metrics across ranks, keyed by task name.
@@ -928,28 +891,6 @@ def evaluate(
                         )
                     )
 
-            # then collect metrics across all ranks. Agree on a consistent key
-            # set first: a rank with an empty shard (world_size > docs-for-task,
-            # reachable for multi_turn_generate on small/limited tasks, or any DP
-            # run with fewer docs than ranks) has no `sample_metrics` keys and
-            # would otherwise issue fewer `gather_object` collectives than its
-            # peers — desyncing the gather and deadlocking the job.
-            local_keys = list(task_output.sample_metrics.keys())
-            gathered_keys = [None] * WORLD_SIZE
-            torch.distributed.all_gather_object(gathered_keys, local_keys)
-            all_keys = sorted({k for keys in gathered_keys for k in keys})
-            for metrics in all_keys:
-                metric_list = [None] * WORLD_SIZE if RANK == 0 else None
-                torch.distributed.gather_object(
-                    obj=task_output.sample_metrics.get(metrics, []),
-                    object_gather_list=metric_list,
-                    dst=0,
-                )
-                if RANK == 0:
-                    task_output.sample_metrics[metrics] = list(
-                        itertools.chain.from_iterable(metric_list)
-
-    """
         rank_metrics = {
             task_name: dict(acc["raw_metrics"])
             for task_name, acc in eval_results_acc.items()
@@ -957,14 +898,18 @@ def evaluate(
         all_metrics = lm.gather_object(rank_metrics, dst=0)
         if RANK == 0:
             for task_name, acc in eval_results_acc.items():
-                for metric_key in acc["raw_metrics"]:
+                metric_keys = {
+                    metric_key
+                    for rank_data in all_metrics  # type: ignore[union-attr]
+                    for metric_key in rank_data[task_name]
+                }
+                for metric_key in metric_keys:
                     acc["raw_metrics"][metric_key] = list(
                         itertools.chain.from_iterable(
-                            rank_data[task_name][metric_key]
+                            rank_data[task_name].get(metric_key, [])
                             for rank_data in all_metrics  # type: ignore
                         )
                     )
-    """
 
     if RANK == 0:
         res = _process_results(eval_results_acc, groups, bootstrap_iters)
