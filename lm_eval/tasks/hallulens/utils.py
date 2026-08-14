@@ -11,7 +11,7 @@ import aiohttp
 
 API_URL = "https://api.swissai.svc.cscs.ch/v1"
 API_KEY = os.getenv("CSCS_SERVING_API")
-MODEL_NAME = "Qwen/Qwen3.5-27B"
+MODEL_NAME = os.getenv("HALLULENS_JUDGE_MODEL", "Qwen/Qwen3.5-27B")
 
 def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=20):
     """
