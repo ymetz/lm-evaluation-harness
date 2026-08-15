@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Callable, Iterable, List, Union
 
 from lm_eval.api.instance import Instance
 
