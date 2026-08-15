@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from lm_eval.tasks._yaml_loader import load_yaml
@@ -10,10 +12,11 @@ from lm_eval.tasks._yaml_loader import load_yaml
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from pathlib import Path
 
 log = logging.getLogger(__name__)
 _IGNORE_DIRS = {"__pycache__", ".ipynb_checkpoints"}
+INDEX_FILENAME = "_task_index.json"
+INDEX_SCHEMA_VERSION = 1
 
 
 class Kind(Enum):
@@ -34,9 +37,7 @@ class Entry:
 
 
 class TaskIndex:
-    """Walks one or more directories, parses YAML quickly (functions unresolved),
-    and produces a mapping {task_name: Entry}.
-    """
+    """Build, persist, and load task discovery metadata."""
 
     def __init__(self, *, meta: dict[str, str] | None = None) -> None:
         pass
@@ -65,18 +66,118 @@ class TaskIndex:
                     continue
 
             # Merge: later paths overwrite earlier, with warning
-            for name, entry in path_index.items():
-                if name in index:
-                    log.warning(
-                        "Task '%s' from %s overrides existing task from %s",
-                        name,
-                        entry.yaml_path,
-                        index[name].yaml_path,
-                    )
-                index[name] = entry
+            TaskIndex.merge(index, path_index)
 
         log.debug("Built task index with %d entries", len(index))
         return index
+
+    @staticmethod
+    def merge(index: dict[str, Entry], additions: dict[str, Entry]) -> None:
+        """Merge entries in place, preserving include-path override semantics."""
+        for name, entry in additions.items():
+            if name in index:
+                log.warning(
+                    "Task '%s' from %s overrides existing task from %s",
+                    name,
+                    entry.yaml_path,
+                    index[name].yaml_path,
+                )
+            index[name] = entry
+
+    @staticmethod
+    def read(path: Path, *, root: Path) -> dict[str, Entry]:
+        """Load a persistent index without touching the indexed YAML files."""
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        if not isinstance(payload, dict):
+            raise TypeError("Task index root must be an object")
+        if payload.get("schema_version") != INDEX_SCHEMA_VERSION:
+            raise ValueError(
+                "Unsupported task index schema version "
+                f"{payload.get('schema_version')!r}; expected {INDEX_SCHEMA_VERSION}"
+            )
+        raw_entries = payload.get("entries")
+        if not isinstance(raw_entries, dict):
+            raise TypeError("Task index 'entries' must be an object")
+
+        index: dict[str, Entry] = {}
+        for name, raw_entry in raw_entries.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("Task index entry names must be non-empty strings")
+            if not isinstance(raw_entry, dict):
+                raise TypeError(f"Task index entry {name!r} must be an object")
+            try:
+                kind = Kind[raw_entry["kind"]]
+            except (KeyError, TypeError) as err:
+                raise ValueError(
+                    f"Task index entry {name!r} has an invalid kind"
+                ) from err
+
+            relative_path = raw_entry.get("yaml_path")
+            yaml_path = None
+            if relative_path is not None:
+                if not isinstance(relative_path, str):
+                    raise ValueError(
+                        f"Task index entry {name!r} has a non-string YAML path"
+                    )
+                posix_path = PurePosixPath(relative_path)
+                if posix_path.is_absolute() or ".." in posix_path.parts:
+                    raise ValueError(
+                        f"Task index entry {name!r} has an unsafe YAML path"
+                    )
+                yaml_path = root.joinpath(*posix_path.parts)
+
+            tags = raw_entry.get("tags", [])
+            if not isinstance(tags, list) or not all(
+                isinstance(tag, str) for tag in tags
+            ):
+                raise ValueError(f"Task index entry {name!r} has invalid tags")
+            index[name] = Entry(
+                name=name,
+                kind=kind,
+                yaml_path=yaml_path,
+                cfg=None,
+                tags=set(tags),
+            )
+
+        expected_count = payload.get("entry_count")
+        if expected_count is not None and expected_count != len(index):
+            raise ValueError(
+                f"Task index entry count mismatch: {expected_count!r} != {len(index)}"
+            )
+        return index
+
+    @staticmethod
+    def write(index: dict[str, Entry], path: Path, *, root: Path) -> None:
+        """Write discovery metadata with YAML paths relative to ``root``."""
+        root = root.resolve()
+        entries: dict[str, dict[str, Any]] = {}
+        for name, entry in sorted(index.items()):
+            relative_path = None
+            if entry.yaml_path is not None:
+                try:
+                    relative_path = (
+                        entry.yaml_path.resolve().relative_to(root).as_posix()
+                    )
+                except ValueError as err:
+                    raise ValueError(
+                        f"Cannot index YAML path outside task root: {entry.yaml_path}"
+                    ) from err
+            entries[name] = {
+                "kind": entry.kind.name,
+                "yaml_path": relative_path,
+                "tags": sorted(entry.tags),
+            }
+
+        payload = {
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "entry_count": len(entries),
+            "entries": entries,
+        }
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     @staticmethod
     def _iter_yaml_files(root: Path):

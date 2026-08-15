@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from collections import defaultdict
 from itertools import chain
@@ -12,12 +13,15 @@ from lm_eval import utils
 from lm_eval.api.group import Group
 from lm_eval.api.task import Task
 from lm_eval.tasks._factory import TaskFactory
-from lm_eval.tasks._index import Entry, Kind, TaskIndex
+from lm_eval.tasks._index import INDEX_FILENAME, Entry, Kind, TaskIndex
 from lm_eval.tasks._yaml_loader import load_yaml
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+
+
+eval_logger = logging.getLogger(__name__)
 
 
 class TaskDict(TypedDict):
@@ -37,10 +41,10 @@ class TaskDict(TypedDict):
 class TaskManager:
     """Central entry point for discovering and loading evaluation tasks.
 
-    On construction, scans one or more directories for YAML task configs and
-    builds an in-memory index of every known task, group, and tag.  Callers
-    then use :meth:`load` to instantiate tasks by name, glob pattern, file
-    path, or inline config dict.
+    On construction, loads the bundled persistent task index and scans any
+    explicitly included directories for YAML task configs. Callers then use
+    :meth:`load` to instantiate tasks by name, glob pattern, file path, or
+    inline config dict.
 
     Example::
 
@@ -77,12 +81,40 @@ class TaskManager:
         index = TaskIndex()
         self._factory: TaskFactory = TaskFactory(meta=metadata)
 
-        all_paths: list[Path] = []
-        # Process defaults FIRST, then include_path (later paths can override earlier)
+        self._index: dict[str, Entry] = {}
+        # Load bundled defaults from one persistent file. Invalid or absent
+        # indexes fall back to the complete scan for source-tree compatibility.
         if include_defaults:
-            all_paths.append(Path(__file__).parent)
+            default_root = Path(__file__).parent
+            index_path = default_root / INDEX_FILENAME
+            if index_path.is_file():
+                try:
+                    default_index = index.read(index_path, root=default_root)
+                    eval_logger.debug(
+                        "Loaded %d bundled task index entries from %s",
+                        len(default_index),
+                        index_path,
+                    )
+                except (OSError, TypeError, ValueError) as err:
+                    eval_logger.warning(
+                        "Could not load bundled task index %s (%s); "
+                        "falling back to a task catalogue scan",
+                        index_path,
+                        err,
+                    )
+                    default_index = index.build([default_root])
+            else:
+                eval_logger.debug(
+                    "No bundled task index at %s; scanning the task catalogue",
+                    index_path,
+                )
+                default_index = index.build([default_root])
+            index.merge(self._index, default_index)
+
+        # Explicit include paths are always scanned dynamically and applied
+        # after defaults, so custom tasks retain their override precedence.
         if include_path:
-            all_paths += [
+            include_paths = [
                 Path(p)
                 for p in (
                     include_path
@@ -90,8 +122,7 @@ class TaskManager:
                     else [include_path]
                 )
             ]
-
-        self._index = index.build(all_paths)
+            index.merge(self._index, index.build(include_paths))
 
         buckets = defaultdict(list)
         for k, e in self._index.items():

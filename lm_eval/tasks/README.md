@@ -5,6 +5,22 @@ A list of supported tasks and task groupings can be viewed with `lm-eval ls task
 For more information, including a full list of task names and their precise meanings or sources, follow the links
 provided to the individual README.md files for each subfolder.
 
+## Persistent task index
+
+Bundled tasks are discovered through `_task_index.json` so that every
+`TaskManager` construction does not have to parse the complete YAML catalogue.
+After adding, removing, renaming, regrouping, or retagging a bundled task,
+regenerate the index from the repository root:
+
+```bash
+python scripts/build_task_index.py
+```
+
+The index contains discovery metadata and relative YAML paths only. Full task
+configs remain lazily loaded when a task is selected. External task directories
+passed with `--include_path` are always scanned dynamically and do not require
+regenerating the bundled index.
+
 
 | Task Family                                                              | Description                                                                                                                                                                                                                                                                                                                            | Language(s)                                                                                                                                                                                                                                                   |
 |--------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from lm_eval.tasks import TaskManager
-from lm_eval.tasks._index import Entry, Kind, TaskIndex
+from lm_eval.tasks._index import INDEX_FILENAME, Entry, Kind, TaskIndex
 from lm_eval.tasks._yaml_loader import load_yaml
 
 
@@ -234,6 +234,18 @@ class TestEntry:
 
 
 class TestTaskIndex:
+    def test_bundled_persistent_index_is_current(self, tmp_path):
+        task_root = Path(__file__).parents[1] / "lm_eval" / "tasks"
+        committed_index = task_root / INDEX_FILENAME
+        rebuilt_index = tmp_path / INDEX_FILENAME
+
+        TaskIndex.write(TaskIndex.build([task_root]), rebuilt_index, root=task_root)
+
+        assert committed_index.read_bytes() == rebuilt_index.read_bytes(), (
+            f"{INDEX_FILENAME} is stale; regenerate it with "
+            "`python scripts/build_task_index.py`"
+        )
+
     def test_build_from_directory(self, tmp_path):
         """Build index from a directory with YAML files"""
         task_content = """
@@ -355,6 +367,27 @@ tag: my_custom_tag
 
         assert "should_ignore" not in result
 
+    def test_persistent_index_round_trip_does_not_read_yaml(self, tmp_path):
+        task_path = tmp_path / "task.yaml"
+        task_path.write_text("task: indexed_task\ntag: indexed_tag\n")
+        built = TaskIndex.build([tmp_path])
+        index_path = tmp_path / INDEX_FILENAME
+        TaskIndex.write(built, index_path, root=tmp_path)
+
+        task_path.write_text("this is deliberately no longer valid yaml: [")
+        loaded = TaskIndex.read(index_path, root=tmp_path)
+
+        assert loaded["indexed_task"].kind == Kind.TASK
+        assert loaded["indexed_task"].yaml_path == task_path
+        assert loaded["indexed_tag"].tags == {"indexed_task"}
+
+    def test_persistent_index_rejects_unknown_schema(self, tmp_path):
+        index_path = tmp_path / INDEX_FILENAME
+        index_path.write_text('{"schema_version": 999, "entries": {}}')
+
+        with pytest.raises(ValueError, match="schema version"):
+            TaskIndex.read(index_path, root=tmp_path)
+
 
 # =============================================================================
 # TaskManager Integration Tests
@@ -376,6 +409,36 @@ def test_configs_task_manager():
 
 
 class TestTaskManagerIntegration:
+    def test_bundled_index_avoids_default_catalogue_scan(self, monkeypatch):
+        def fail_scan(*args, **kwargs):
+            raise AssertionError("bundled task catalogue was scanned")
+
+        monkeypatch.setattr(TaskIndex, "build", fail_scan)
+
+        task_manager = TaskManager()
+
+        assert "arc_easy" in task_manager.task_index
+
+    def test_include_path_is_still_scanned_and_overrides_bundled_index(
+        self, tmp_path, monkeypatch
+    ):
+        custom_task = tmp_path / "arc_easy.yaml"
+        custom_task.write_text("task: arc_easy\ndataset_path: custom\n")
+        original_build = TaskIndex.build
+        scanned_paths = []
+
+        def track_scan(paths, **kwargs):
+            paths = list(paths)
+            scanned_paths.extend(paths)
+            return original_build(paths, **kwargs)
+
+        monkeypatch.setattr(TaskIndex, "build", staticmethod(track_scan))
+
+        task_manager = TaskManager(include_path=tmp_path)
+
+        assert scanned_paths == [tmp_path]
+        assert task_manager.task_index["arc_easy"].yaml_path == custom_task
+
     def test_initialization(self, shared_task_manager):
         """TaskManager initializes with default tasks"""
         assert len(shared_task_manager.all_tasks) > 0
