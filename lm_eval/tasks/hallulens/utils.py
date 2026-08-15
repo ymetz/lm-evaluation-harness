@@ -182,9 +182,10 @@ def generate_batch(
 
 def jsonify_ans_longwiki(raw_responses, eval_prompts, model, tokenizer, key):
     def check_validity(gen):
-        if '{{"{}":false}}'.format(key) in gen.lower():
+        g = "".join(gen.lower().split())  # drop all whitespace; matches ": true" and ```json fences
+        if '{{"{}":false}}'.format(key) in g:
             return '{{"{}":false}}'.format(key)
-        elif '{{"{}":true}}'.format(key) in gen.lower():
+        elif '{{"{}":true}}'.format(key) in g:
             return '{{"{}":true}}'.format(key)
         else:
             return -1
@@ -296,7 +297,7 @@ def jsonify_ans(
     raw_response: List[str], eval_prompt: List[str], key: str, model, tokenizer
 ):
     def check_validity(gen):
-        gen_nospace = gen.replace(" ", "")
+        gen_nospace = "".join(gen.lower().split())  # drop all whitespace + lowercase; handles ": true", newlines, ```json fences
         if '{{"{}":false}}'.format(key) in gen_nospace:
             return '{{"{}":false}}'.format(key)
         elif '{{"{}":true}}'.format(key) in gen_nospace:
