@@ -240,6 +240,11 @@ class TestTaskIndex:
         committed_index = task_root / INDEX_FILENAME
         rebuilt_index = tmp_path / INDEX_FILENAME
 
+        assert committed_index.is_file(), (
+            f"Missing generated {INDEX_FILENAME}; run "
+            "`python scripts/build_task_index.py` and add the resulting file to Git"
+        )
+
         TaskIndex.write(TaskIndex.build([task_root]), rebuilt_index, root=task_root)
 
         assert committed_index.read_bytes() == rebuilt_index.read_bytes(), (
