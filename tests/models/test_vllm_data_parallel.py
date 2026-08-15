@@ -8,6 +8,8 @@ import sys
 from types import ModuleType
 from unittest.mock import patch
 
+from lm_eval.api.registry import model_registry
+
 
 def _load_vllm_adapter(monkeypatch):
     reservations: list[int] = []
@@ -73,6 +75,15 @@ def _load_vllm_adapter(monkeypatch):
         "ray": ray,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
+    # Other tests may already have materialized the lazy registry entry. Re-importing
+    # this module creates a distinct VLLM class object, which duplicate-alias protection
+    # correctly rejects. Restore the lazy placeholder for this isolated import; the
+    # monkeypatch fixture puts the previous registry value back after the test.
+    monkeypatch.setitem(
+        model_registry._objs,
+        "vllm",
+        "lm_eval.models.vllm_causallms:VLLM",
+    )
     sys.modules.pop("lm_eval.models.vllm_causallms", None)
     with patch.object(importlib.metadata, "version", return_value="0.22.1"):
         adapter = importlib.import_module("lm_eval.models.vllm_causallms")

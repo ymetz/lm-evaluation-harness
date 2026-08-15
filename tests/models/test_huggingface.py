@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import tokenizers
@@ -16,9 +15,7 @@ from packaging.version import parse as parse_version
 from lm_eval import tasks
 from lm_eval.models.huggingface import HFLM
 
-
-if TYPE_CHECKING:
-    from lm_eval.api.instance import Instance
+from lm_eval.api.instance import Instance
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 task_manager = tasks.TaskManager()
