@@ -7,6 +7,7 @@ import pytest
 from lm_eval.tasks import TaskManager
 from lm_eval.tasks._index import INDEX_FILENAME, Entry, Kind, TaskIndex
 from lm_eval.tasks._yaml_loader import load_yaml
+from lm_eval.tasks.manager import TASK_NOT_FOUND_GUIDANCE
 
 
 # =============================================================================
@@ -409,6 +410,16 @@ def test_configs_task_manager():
 
 
 class TestTaskManagerIntegration:
+    def test_missing_task_explains_index_regeneration_and_include_path(self):
+        task_manager = TaskManager(include_defaults=False)
+
+        with pytest.raises(KeyError) as error:
+            task_manager._load_spec("new_local_task")
+
+        assert TASK_NOT_FOUND_GUIDANCE in str(error.value)
+        assert "python scripts/build_task_index.py" in str(error.value)
+        assert "--include_path" in str(error.value)
+
     def test_bundled_index_avoids_default_catalogue_scan(self, monkeypatch):
         def fail_scan(*args, **kwargs):
             raise AssertionError("bundled task catalogue was scanned")

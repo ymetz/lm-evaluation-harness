@@ -23,6 +23,17 @@ if TYPE_CHECKING:
 
 eval_logger = logging.getLogger(__name__)
 
+TASK_NOT_FOUND_GUIDANCE = (
+    "If this is a newly added bundled task under lm_eval/tasks, regenerate the "
+    "persistent index with `python scripts/build_task_index.py`. For a local or "
+    "external task, pass its directory with `--include_path`."
+)
+
+
+def task_not_found_message(missing: str) -> str:
+    """Return actionable discovery guidance for unresolved task names."""
+    return f"Tasks not found: {missing}. {TASK_NOT_FOUND_GUIDANCE}"
+
 
 class TaskDict(TypedDict):
     """Return type of :meth:`TaskManager.load`.
@@ -192,7 +203,8 @@ class TaskManager:
                         entry, overrides=None, registry=self._index
                     )
                 raise KeyError(
-                    f"Spec '{spec}' is not a registered task/group/tag name or valid YAML path"
+                    f"Spec '{spec}' is not a registered task/group/tag name or "
+                    f"valid YAML path. {TASK_NOT_FOUND_GUIDANCE}"
                 )
 
             case dict():

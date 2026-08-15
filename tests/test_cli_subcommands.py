@@ -371,7 +371,9 @@ class TestValidateCommand:
             validate_cmd._execute(args)
 
         assert exc_info.value.code == 1
-        mock_print.assert_any_call("Tasks not found: nonexistent")
+        from lm_eval.tasks.manager import task_not_found_message
+
+        mock_print.assert_any_call(task_not_found_message("nonexistent"))
 
 
 class TestEvaluatorConfigTaskLoading:
@@ -467,6 +469,7 @@ doc_to_target: "{{answer}}"
     def test_missing_yaml_file_raises_error(self, tmp_path):
         """Test that non-existent yaml file raises proper error."""
         from lm_eval.config.evaluate_config import EvaluatorConfig
+        from lm_eval.tasks.manager import TASK_NOT_FOUND_GUIDANCE
 
         cfg = EvaluatorConfig(
             tasks=[str(tmp_path / "nonexistent.yaml")],
@@ -474,8 +477,10 @@ doc_to_target: "{{answer}}"
         )
         cfg._configure()
 
-        with pytest.raises(ValueError, match="Tasks not found"):
+        with pytest.raises(ValueError, match="Tasks not found") as error:
             cfg.process_tasks()
+
+        assert TASK_NOT_FOUND_GUIDANCE in str(error.value)
 
 
 class TestEvaluatorConfigFromCLI:

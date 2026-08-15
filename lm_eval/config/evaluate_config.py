@@ -360,6 +360,7 @@ class EvaluatorConfig:
 
         from lm_eval.tasks import TaskManager
         from lm_eval.tasks._yaml_loader import load_yaml
+        from lm_eval.tasks.manager import task_not_found_message
 
         # if metadata manually passed use that:
         self.metadata = metadata or self.metadata
@@ -418,7 +419,7 @@ class EvaluatorConfig:
         task_missing = [task for task, matches in match_dict.items() if not matches]
         if task_missing:
             missing = ", ".join(task_missing)
-            raise ValueError(f"Tasks not found: {missing}")
+            raise ValueError(task_not_found_message(missing))
 
         # Update tasks with resolved names
         self.tasks = task_names

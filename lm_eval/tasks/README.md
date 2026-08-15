@@ -16,6 +16,11 @@ regenerate the index from the repository root:
 python scripts/build_task_index.py
 ```
 
+> [!WARNING]
+> A new YAML placed directly under `lm_eval/tasks/` is not discoverable by name
+> until this index is regenerated. While iterating on a local task, pass its
+> directory with `--include_path`; external paths are always scanned dynamically.
+
 The index contains discovery metadata and relative YAML paths only. Full task
 configs remain lazily loaded when a task is selected. External task directories
 passed with `--include_path` are always scanned dynamically and do not require
