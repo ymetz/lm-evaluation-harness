@@ -70,6 +70,14 @@ class LocalCompletionsAPI(TemplateAPI):
         # tokenized_requests=False, which breaks loglikelihood tasks
         # (_encode_pair needs a real str to .rstrip()) and produces an
         # invalid completions payload for generate_until.
+        #
+        # Note this template is resolved independently, client-side, from
+        # whatever the serving engine was actually launched with -- if the
+        # server is running a custom --chat-template override that differs
+        # from this tokenizer's own bundled default, this will silently
+        # score against a different template than what real inference
+        # traffic sees. They match as long as serving wasn't given an
+        # explicit template override.
         if self.tokenizer_backend == "huggingface":
             return self.tokenizer.apply_chat_template(
                 chat_history,
