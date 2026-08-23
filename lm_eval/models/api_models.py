@@ -510,6 +510,7 @@ class TemplateAPI(TemplateLM):
         )
         cache_method = "generate_until" if generate else "loglikelihood"
         acquired = await sem.acquire()
+        outputs = None
         try:
             async with session.post(
                 self.base_url,
