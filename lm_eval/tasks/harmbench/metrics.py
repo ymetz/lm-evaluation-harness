@@ -81,8 +81,8 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=1, max_retries=6):
                 return data["choices"][0]["message"]["content"]
 
             # print(f"Attempt {attempt + 1}/{max_retries}: status {resp.status_code}: {resp.text}")
-        except Exception:  # noqa: BLE001, S110
-            pass
+        except Exception as e:  # noqa: BLE001, S110
+            print(f"Attempt {attempt + 1}/{max_retries} for judge model {model}: Exception: {e}")
 
         if attempt < max_retries - 1:
             wait = min(2**attempt, 15)
@@ -262,7 +262,7 @@ def compute_results_classifier(
             break
 
     print(
-        "[SKIPPED SAMPLE] Failed to get a prediction through the remote API endpoint, even after repeated reductions of completion length, skipping this sample. Either this sample is too long for the max context window of the judge model (2048), or there is a problem with the model endpoint."
+        "[SKIPPED SAMPLE] Failed to get a prediction through the remote API endpoint."
     )
     return {"score": np.nan}
 
