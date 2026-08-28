@@ -69,10 +69,13 @@ def test_mt_bench_task_manager_loads_registered_task():
     assert len(task.test_docs()) == 80
 
 
-def test_mt_bench_default_judge_model_matches_hosted_qwen(monkeypatch):
+def test_mt_bench_default_judge_model_uses_cscs_user_scope(monkeypatch):
     monkeypatch.delenv("MT_BENCH_JUDGE_MODEL", raising=False)
+    monkeypatch.setenv("CSCS_SERVING_API", "test-key")
+    monkeypatch.setenv("USER", "ymetz")
+    monkeypatch.setenv("LM_EVAL_JUDGE_MODEL_DISCOVERY", "0")
 
-    assert metric._judge_model() == "Qwen/Qwen3.5-27B"
+    assert metric._judge_model() == "ymetz/Qwen/Qwen3.5-27B"
 
 
 def test_mt_bench_multiturn_uses_chat_template_when_enabled():

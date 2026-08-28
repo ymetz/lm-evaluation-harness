@@ -14,6 +14,7 @@ from typing import Any
 
 from datasets import Dataset, DatasetDict, load_dataset
 
+from lm_eval.api.model_resolver import get_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
@@ -336,10 +337,16 @@ def process_results(
 
 
 def _judge_model() -> str:
-    model = os.getenv("SWISS_AI_CHARTER_JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
-    if not model:
-        raise OSError("Set SWISS_AI_CHARTER_JUDGE_MODEL to use hosted judging.")
-    return model
+    return get_judge_model(
+        DEFAULT_JUDGE_MODEL,
+        env_var="SWISS_AI_CHARTER_JUDGE_MODEL",
+        api_base=_api_base(),
+        api_key=(
+            os.getenv("SWISS_AI_CHARTER_JUDGE_API_KEY")
+            or os.getenv("CSCS_SERVING_API")
+            or os.getenv("OPENAI_API_KEY")
+        ),
+    )
 
 
 def _api_key() -> str:

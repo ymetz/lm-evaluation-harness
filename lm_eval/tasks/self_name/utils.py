@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 from datasets import Dataset, DatasetDict
 
+from lm_eval.api.model_resolver import resolve_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
@@ -415,17 +416,21 @@ def _judge_api_base() -> str | None:
     return base_url
 
 
+def _judge_api_key() -> str | None:
+    return (
+        os.getenv("SELF_NAME_JUDGE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("CSCS_SERVING_API")
+    )
+
+
 def _judge_client():
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise ImportError("Install the openai package to use self-name-judge.") from exc
 
-    api_key = (
-        os.getenv("SELF_NAME_JUDGE_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or os.getenv("CSCS_SERVING_API")
-    )
+    api_key = _judge_api_key()
     if not api_key:
         raise OSError(
             "Set SELF_NAME_JUDGE_API_KEY, OPENAI_API_KEY, or CSCS_SERVING_API "
@@ -476,6 +481,11 @@ def process_results_llm_judge(doc, predictions, **kwargs):
     model = os.getenv("SELF_NAME_JUDGE_MODEL")
     if not model:
         raise OSError("Set SELF_NAME_JUDGE_MODEL to use self-name-judge.")
+    model = resolve_judge_model(
+        model,
+        api_base=_judge_api_base(),
+        api_key=_judge_api_key(),
+    )
 
     prompt = JUDGE_USER_TEMPLATE.format(
         language=doc["language"],

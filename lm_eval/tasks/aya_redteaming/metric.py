@@ -4,10 +4,11 @@ import time
 
 import requests
 
+from lm_eval.api.model_resolver import get_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
-MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct"
+DEFAULT_MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct"
 
 API_URL = "https://api.swissai.svc.cscs.ch/v1"
 API_KEY = os.getenv("CSCS_SERVING_API")
@@ -18,6 +19,15 @@ if API_KEY is None or API_KEY.strip() == "":
     )
 
 
+def _judge_model() -> str:
+    return get_judge_model(
+        DEFAULT_MODEL_NAME,
+        env_var="AYA_REDTEAMING_JUDGE_MODEL",
+        api_base=API_URL,
+        api_key=API_KEY,
+    )
+
+
 def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=10):
     """
     Attempt to generate text from the SwissAI API.
@@ -25,18 +35,19 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=10)
     """
     for attempt in range(max_retries):
         try:
+            model = _judge_model()
             headers = {
                 "Authorization": f"Bearer {API_KEY}",
                 "Content-Type": "application/json",
             }
             payload = {
-                "model": MODEL_NAME,
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
 
-            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
+            acquire_judge_rate_limit(f"{API_URL}:{model}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,

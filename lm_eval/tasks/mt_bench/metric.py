@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from lm_eval.api.model_resolver import get_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
@@ -39,7 +40,16 @@ def _load_judge_prompts() -> dict[str, dict[str, Any]]:
 
 
 def _judge_model() -> str:
-    return os.getenv("MT_BENCH_JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
+    return get_judge_model(
+        DEFAULT_JUDGE_MODEL,
+        env_var="MT_BENCH_JUDGE_MODEL",
+        api_base=_judge_api_base(),
+        api_key=(
+            os.getenv("MT_BENCH_JUDGE_API_KEY")
+            or os.getenv("CSCS_SERVING_API")
+            or os.getenv("OPENAI_API_KEY")
+        ),
+    )
 
 
 def _judge_api_key() -> str:

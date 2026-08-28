@@ -6,12 +6,22 @@ import time
 import requests
 import torch
 
+from lm_eval.api.model_resolver import get_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
 API_URL = "https://api.swissai.svc.cscs.ch/v1"
 API_KEY = os.getenv("CSCS_SERVING_API")
-MODEL_NAME = os.getenv("HALLULENS_JUDGE_MODEL", "Qwen/Qwen3.5-27B")
+DEFAULT_MODEL_NAME = "Qwen/Qwen3.5-27B"
+
+
+def _judge_model() -> str:
+    return get_judge_model(
+        DEFAULT_MODEL_NAME,
+        env_var="HALLULENS_JUDGE_MODEL",
+        api_base=API_URL,
+        api_key=API_KEY,
+    )
 
 
 def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=20):
@@ -21,12 +31,13 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=20)
     """
     for attempt in range(max_retries):
         try:
+            model_name = _judge_model()
             headers = {
                 "Authorization": f"Bearer {API_KEY}",
                 "Content-Type": "application/json",
             }
             payload = {
-                "model": MODEL_NAME,
+                "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -36,7 +47,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=20)
                 "chat_template_kwargs": {"enable_thinking": False},
             }
 
-            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
+            acquire_judge_rate_limit(f"{API_URL}:{model_name}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,

@@ -132,6 +132,12 @@ class MyAPIModel(TemplateAPI):
 
 When subclassing `TemplateAPI`, you can override these arguments in your `__init__` method to set default values specific to your API. You can also add additional (potentially user-specified) arguments as needed for your specific implementation.
 
+### Host-scoped judge models
+
+Judge-backed tasks using a CSCS endpoint resolve their configured model name against the endpoint's `/models` response. An unscoped model such as `meta-llama/Llama-Guard-4-12B` prefers `$USER/meta-llama/Llama-Guard-4-12B`, then falls back to `CSCS-Inference/meta-llama/Llama-Guard-4-12B` or another unique matching host scope.
+
+Set `JUDGE_MODEL_PREFIX` to override the preferred scope. Task-specific judge-model variables may contain either an unscoped model or a complete hosted ID. Set `LM_EVAL_JUDGE_MODEL_DISCOVERY=0` to skip `/models` discovery and use the preferred name directly; `LM_EVAL_JUDGE_MODEL_DISCOVERY_TIMEOUT` controls the discovery timeout in seconds.
+
 ## Example Implementation: OpenAI API
 
 The `OpenAICompletionsAPI` and `OpenAIChatCompletion` ([here](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/models/openai_completions.py) classes demonstrate how to implement API models using the `TemplateAPI` class. Here's a breakdown of the key components:

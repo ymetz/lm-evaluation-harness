@@ -31,6 +31,7 @@ import time
 
 import numpy as np
 
+from lm_eval.api.model_resolver import get_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
@@ -40,7 +41,17 @@ logger = logging.getLogger(__name__)
 
 # CSCS SwissAI serving endpoint
 API_URL = "https://api.swissai.svc.cscs.ch/v1"
-JUDGE_MODEL = "Qwen/Qwen3.5-27B"
+DEFAULT_JUDGE_MODEL = "Qwen/Qwen3.5-27B"
+
+
+def _judge_model() -> str:
+    return get_judge_model(
+        DEFAULT_JUDGE_MODEL,
+        env_var="ARENA_HARD_JUDGE_MODEL",
+        api_base=API_URL,
+        api_key=os.getenv("CSCS_SERVING_API"),
+    )
+
 
 # Restrict evaluation to a single Arena-Hard v2.0 category. The released
 # dataset bundles 500 "hard_prompt" + 250 "creative_writing" items; we only
@@ -349,9 +360,10 @@ def _judge_call(client, uid, round_num, user_prompt):
     )
     t0 = time.time()
     try:
-        acquire_judge_rate_limit(f"{API_URL}:{JUDGE_MODEL}")
+        judge_model = _judge_model()
+        acquire_judge_rate_limit(f"{API_URL}:{judge_model}")
         resp = client.chat.completions.create(
-            model=JUDGE_MODEL,
+            model=judge_model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -760,7 +772,7 @@ def _log_judgments(valid_items, results_map, win_rate):
             for rec in per_item_logs:
                 out = {
                     "metric": "arena_hard_v2",
-                    "judge_model": JUDGE_MODEL,
+                    "judge_model": _judge_model(),
                     "win_rate": win_rate,
                     **rec,
                 }
@@ -894,7 +906,7 @@ def arena_hard_agg(items):
     total_calls = 2 * len(valid_items)
     logger.info(
         f"Running Arena-Hard v2.0 judging on {len(valid_items)} items "
-        f"using {JUDGE_MODEL} as judge via CSCS API "
+        f"using {_judge_model()} as judge via CSCS API "
         f"({total_calls} judge calls with {_JUDGE_MAX_WORKERS} concurrent workers)..."
     )
     logger.info(f"Scoring method: {SCORING_METHOD} (env ARENA_HARD_SCORING_METHOD)")

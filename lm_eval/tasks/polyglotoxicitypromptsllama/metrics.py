@@ -6,10 +6,11 @@ import time
 import numpy as np
 import requests
 
+from lm_eval.api.model_resolver import get_judge_model
 from lm_eval.api.rate_limiter import acquire_judge_rate_limit
 
 
-MODEL_NAME = "meta-llama/Llama-Guard-4-12B"
+DEFAULT_MODEL_NAME = "meta-llama/Llama-Guard-4-12B"
 MAX_OUTPUT_TOKENS = 50
 
 API_URL = "https://api.swissai.svc.cscs.ch/v1"
@@ -21,24 +22,34 @@ eval_logger = logging.getLogger(__name__)
 _CONTEXT_TOO_LONG = object()
 
 
+def _judge_model() -> str:
+    return get_judge_model(
+        DEFAULT_MODEL_NAME,
+        env_var="POLYGLOTOXICITY_JUDGE_MODEL",
+        api_base=API_URL,
+        api_key=API_KEY,
+    )
+
+
 def try_remote_generate(
     messages, temperature=0.0, max_tokens=MAX_OUTPUT_TOKENS, max_retries=10
 ):
     """Call Llama Guard via /v1/chat/completions with list-of-dicts content."""
     for attempt in range(max_retries):
         try:
+            model = _judge_model()
             headers = {
                 "Authorization": f"Bearer {API_KEY}",
                 "Content-Type": "application/json",
             }
             payload = {
-                "model": MODEL_NAME,
+                "model": model,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
 
-            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
+            acquire_judge_rate_limit(f"{API_URL}:{model}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,
