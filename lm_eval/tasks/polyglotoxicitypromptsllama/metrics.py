@@ -6,6 +6,8 @@ import time
 import numpy as np
 import requests
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 MODEL_NAME = "meta-llama/Llama-Guard-4-12B"
 MAX_OUTPUT_TOKENS = 50
@@ -36,6 +38,7 @@ def try_remote_generate(
                 "max_tokens": max_tokens,
             }
 
+            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,
@@ -53,14 +56,14 @@ def try_remote_generate(
                     if "maximum context length" in err_msg:
                         eval_logger.warning(f"Context length exceeded: {err_msg}")
                         return _CONTEXT_TOO_LONG
-                except Exception:  # noqa: S110
+                except Exception:  # noqa: BLE001, S110
                     pass
 
             eval_logger.error(
                 f"Attempt {attempt + 1}/{max_retries}: status {resp.status_code}: {resp.text}"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             eval_logger.error(f"Attempt {attempt + 1}/{max_retries}: {e}")
 
         if attempt < max_retries - 1:

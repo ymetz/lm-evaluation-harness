@@ -5,6 +5,8 @@ import os
 import numpy as np
 import requests
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 MODEL_NAME = "meta-llama/Llama-Guard-4-12B"
 
@@ -28,6 +30,7 @@ def try_remote_generate(messages, temperature=0.0, max_tokens=50):
             "max_tokens": max_tokens,
         }
 
+        acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
         resp = requests.post(
             f"{API_URL}/chat/completions",
             headers=headers,
@@ -41,7 +44,7 @@ def try_remote_generate(messages, temperature=0.0, max_tokens=50):
         data = resp.json()
         return data["choices"][0]["message"]["content"].strip()
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         eval_logger.error(f"Error in remote generation: {e}")
         return None
 

@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 eval_logger = logging.getLogger(__name__)
 
@@ -142,6 +144,7 @@ def _judge_one(
     content = ""
     error = None
     try:
+        acquire_judge_rate_limit(f"{_judge_api_base()}:{model}")
         response = client.chat.completions.create(
             model=model,
             messages=[

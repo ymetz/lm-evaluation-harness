@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 from datasets import Dataset, DatasetDict
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 eval_logger = logging.getLogger(__name__)
 
@@ -406,6 +408,13 @@ Respond with JSON only, for example:
 {{"correct": true, "incorrect": false}}"""
 
 
+def _judge_api_base() -> str | None:
+    base_url = os.getenv("SELF_NAME_JUDGE_API_BASE")
+    if base_url is None and os.getenv("CSCS_SERVING_API"):
+        return "https://api.swissai.svc.cscs.ch/v1"
+    return base_url
+
+
 def _judge_client():
     try:
         from openai import OpenAI
@@ -423,9 +432,7 @@ def _judge_client():
             "to use self-name-judge."
         )
 
-    base_url = os.getenv("SELF_NAME_JUDGE_API_BASE")
-    if base_url is None and os.getenv("CSCS_SERVING_API"):
-        base_url = "https://api.swissai.svc.cscs.ch/v1"
+    base_url = _judge_api_base()
 
     if base_url:
         return OpenAI(api_key=api_key, base_url=base_url)
@@ -481,6 +488,7 @@ def process_results_llm_judge(doc, predictions, **kwargs):
     )
 
     try:
+        acquire_judge_rate_limit(f"{_judge_api_base()}:{model}")
         response = _judge_client().chat.completions.create(
             model=model,
             messages=[

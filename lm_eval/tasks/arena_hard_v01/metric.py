@@ -31,6 +31,8 @@ import time
 
 import numpy as np
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +290,7 @@ def _judge_call(client, uid, round_num, user_prompt):
     )
     t0 = time.time()
     try:
+        acquire_judge_rate_limit(f"{API_URL}:{JUDGE_MODEL}")
         resp = client.chat.completions.create(
             model=JUDGE_MODEL,
             messages=[
@@ -305,7 +308,7 @@ def _judge_call(client, uid, round_num, user_prompt):
             f"elapsed={elapsed:.1f}s response_chars={len(content or '')}"
         )
         return (uid, round_num, content)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         elapsed = time.time() - t0
         # Classify the error for easier log analysis
         err_str = str(e)
@@ -695,7 +698,7 @@ def _log_judgments(valid_items, results_map, win_rate):
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
         with open(judge_log_path, "a", encoding="utf-8") as f:
-            for rec in per_item_logs:  # noqa: FURB122
+            for rec in per_item_logs:
                 out = {
                     "metric": "arena_hard_v01",
                     "judge_model": JUDGE_MODEL,
@@ -706,7 +709,7 @@ def _log_judgments(valid_items, results_map, win_rate):
         logger.info(
             f"Wrote {len(per_item_logs)} Arena-Hard judge logs to {judge_log_path}"
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to write judge log {judge_log_path}: {e}")
 
 
@@ -786,7 +789,7 @@ def _log_truncation(items):
             f"Wrote truncation log ({truncated_count}/{len(items)} "
             f"potentially truncated) to {truncation_log_path}"
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to write truncation log {truncation_log_path}: {e}")
 
 

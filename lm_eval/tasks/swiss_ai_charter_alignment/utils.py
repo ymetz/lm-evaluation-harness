@@ -14,6 +14,8 @@ from typing import Any
 
 from datasets import Dataset, DatasetDict, load_dataset
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 eval_logger = logging.getLogger(__name__)
 
@@ -465,7 +467,7 @@ def _coerce_reference_rows(loaded: Any) -> list[dict[str, Any]]:
     if isinstance(loaded, list):
         return loaded
     if not isinstance(loaded, dict):
-        raise ValueError(
+        raise TypeError(
             "Reference JSON must be a list, a {'data': [...]} object, "
             "or a prompt_id mapping."
         )
@@ -680,6 +682,7 @@ def _judge_one(client: Any, model: str, item: dict[str, Any]) -> dict[str, Any]:
     error = None
     started = time.time()
     try:
+        acquire_judge_rate_limit(f"{_api_base()}:{model}")
         response = client.chat.completions.create(**request)
     except Exception as exc:  # noqa: BLE001
         if not use_logprobs:
@@ -693,6 +696,7 @@ def _judge_one(client: Any, model: str, item: dict[str, Any]) -> dict[str, Any]:
             request.pop("logprobs", None)
             request.pop("top_logprobs", None)
             try:
+                acquire_judge_rate_limit(f"{_api_base()}:{model}")
                 response = client.chat.completions.create(**request)
             except Exception as retry_exc:  # noqa: BLE001
                 error = str(retry_exc)
@@ -816,6 +820,7 @@ def _judge_pairwise_round(
     top_logprobs = None
     error = None
     try:
+        acquire_judge_rate_limit(f"{_api_base()}:{model}")
         response = client.chat.completions.create(**request)
     except Exception as exc:  # noqa: BLE001
         if not use_logprobs:
@@ -830,6 +835,7 @@ def _judge_pairwise_round(
             request.pop("logprobs", None)
             request.pop("top_logprobs", None)
             try:
+                acquire_judge_rate_limit(f"{_api_base()}:{model}")
                 response = client.chat.completions.create(**request)
             except Exception as retry_exc:  # noqa: BLE001
                 error = str(retry_exc)

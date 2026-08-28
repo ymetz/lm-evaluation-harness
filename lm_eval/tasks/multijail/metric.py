@@ -5,6 +5,8 @@ import time
 
 import requests
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct"
 
@@ -37,6 +39,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=10)
                 "max_tokens": max_tokens,
             }
 
+            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,
@@ -52,7 +55,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=10)
                 f"Attempt {attempt + 1}/{max_retries}: status {resp.status_code}: {resp.text}"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"Attempt {attempt + 1}/{max_retries}: {e}")
 
         if attempt < max_retries - 1:

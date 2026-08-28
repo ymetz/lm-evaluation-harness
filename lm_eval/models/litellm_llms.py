@@ -91,6 +91,8 @@ class LiteLLMChatCompletion(LocalChatCompletion):
                 eos=self.eos_string,
                 **kwargs,
             )
+            if self._rate_limiter is not None:
+                self._rate_limiter.acquire()
             response = self._litellm.completion(**payload)
             return response.model_dump()
         except Exception as e:
@@ -122,6 +124,8 @@ class LiteLLMChatCompletion(LocalChatCompletion):
         cache_method = "generate_until" if generate else "loglikelihood"
         acquired = await sem.acquire()
         try:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.acquire_async()
             response = await self._litellm.acompletion(**payload)
             outputs = response.model_dump()
             answers = (

@@ -123,6 +123,58 @@ def test_model_generate_call_usage(
         assert result == {"result": "success"}
 
 
+def test_model_call_acquires_configured_rate_limiter():
+    limited_api = LocalCompletionsAPI(
+        base_url="http://test-url.com",
+        tokenizer_backend=None,
+        model="test-model",
+        requests_per_minute=30,
+    )
+    with (
+        patch.object(limited_api._rate_limiter, "acquire") as acquire,
+        patch("requests.post") as mock_post,
+    ):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"result": "success"}
+        mock_post.return_value = mock_response
+
+        limited_api.model_call(["hello"], gen_kwargs={})
+
+    acquire.assert_called_once_with()
+
+
+def test_async_model_call_acquires_configured_rate_limiter():
+    limited_api = LocalCompletionsAPI(
+        base_url="http://test-url.com",
+        tokenizer_backend=None,
+        model="test-model",
+        requests_per_minute=30,
+    )
+    response = AsyncMock()
+    response.ok = True
+    response.json = AsyncMock(return_value={"choices": [{"index": 0, "text": "ok"}]})
+    response.raise_for_status = lambda: None
+    session = MagicMock()
+    session.post.return_value = DummyAsyncContextManager(response)
+
+    async def run():
+        with patch.object(
+            limited_api._rate_limiter, "acquire_async", new_callable=AsyncMock
+        ) as acquire:
+            result = await limited_api.amodel_call(
+                session,
+                asyncio.Semaphore(1),
+                ["hello"],
+                gen_kwargs={},
+            )
+        return result, acquire
+
+    result, acquire = asyncio.run(run())
+
+    assert result == ["ok"]
+    acquire.assert_awaited_once_with()
+
+
 @pytest.mark.parametrize(
     "input_messages, generate, gen_kwargs, expected_payload",
     [
@@ -296,12 +348,12 @@ def test_local_completionsapi_remote_tokenizer_authenticated(monkeypatch):
         tokenizer_backend="remote",
         verify_certificate=True,
         ca_cert_path="secure.crt",
-        auth_token="secure-token",
+        auth_token="secure-token",  # noqa: S106
     )
     assert captured["base_url"] == "https://secure-server"
     assert captured["verify_certificate"] is True
     assert captured["ca_cert_path"] == "secure.crt"
-    assert captured["auth_token"] == "secure-token"
+    assert captured["auth_token"] == "secure-token"  # noqa: S105
 
 
 def test_local_completionsapi_remote_tokenizer_unauthenticated(monkeypatch):
@@ -344,12 +396,12 @@ def test_localchatcompletion_remote_tokenizer_authenticated(monkeypatch):
         tokenizer_backend="remote",
         verify_certificate=True,
         ca_cert_path="secure.crt",
-        auth_token="secure-token",
+        auth_token="secure-token",  # noqa: S106
     )
     assert captured["base_url"] == "https://secure-server"
     assert captured["verify_certificate"] is True
     assert captured["ca_cert_path"] == "secure.crt"
-    assert captured["auth_token"] == "secure-token"
+    assert captured["auth_token"] == "secure-token"  # noqa: S105
 
 
 def test_localchatcompletion_remote_tokenizer_unauthenticated(monkeypatch):

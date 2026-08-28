@@ -4,8 +4,8 @@ import copy
 import itertools
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterable
 import os
+from collections.abc import Awaitable, Callable, Iterable
 from functools import cached_property
 from typing import (
     TYPE_CHECKING,
@@ -13,6 +13,7 @@ from typing import (
     Literal,
     NamedTuple,
 )
+
 
 try:
     import requests
@@ -30,6 +31,7 @@ from io import BytesIO
 from lm_eval import utils
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import TemplateLM
+from lm_eval.api.rate_limiter import get_rate_limiter
 from lm_eval.models.utils import Collator, chunks, configure_pad_token
 
 
@@ -105,9 +107,10 @@ class TemplateAPI(TemplateLM):
 
     def __init__(
         self,
-        model: str = None,
-        pretrained: str = None,  # `model` takes precedence over `pretrained` when passed.
-        base_url: str = None,
+        model: str | None = None,
+        pretrained: str
+        | None = None,  # `model` takes precedence over `pretrained` when passed.
+        base_url: str | None = None,
         tokenizer: str | None = None,
         # Loglikelihood tasks require a tokenizer to calculate context lengths,
         # however the requests can be sent as a string if the API doesn't support token inputs.
@@ -117,13 +120,15 @@ class TemplateAPI(TemplateLM):
         truncate: bool = False,
         # number of concurrent requests. More useful if not batching
         num_concurrent: int = 1,
+        # maximum HTTP request starts per minute; unset disables rate limiting
+        requests_per_minute: float | None = None,
         max_retries: int = 3,
         max_gen_toks: int = 256,
         batch_size: str | int = 1,
         seed: int = 1234,
         max_length: int | None = 2048,
         add_bos_token: bool = False,
-        custom_prefix_token_id: int = None,
+        custom_prefix_token_id: int | None = None,
         # send the requests as tokens or strings
         tokenized_requests: bool = True,
         trust_remote_code: bool = False,
@@ -132,7 +137,7 @@ class TemplateAPI(TemplateLM):
         verify_certificate: bool = True,
         ca_cert_path: str | None = None,
         auth_token: str | None = None,
-        eos_string: str = None,
+        eos_string: str | None = None,
         # timeout in seconds
         timeout: int = 300,
         header: dict[str, str] | None = None,
@@ -177,6 +182,15 @@ class TemplateAPI(TemplateLM):
                 "Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1."
             )
         self._concurrent = int(num_concurrent)
+        self._rate_limiter = get_rate_limiter(
+            requests_per_minute,
+            scope=f"model:{self.base_url}:{self.model}",
+        )
+        if self._rate_limiter is not None:
+            eval_logger.info(
+                "Rate limiting API requests to %s requests/minute",
+                self._rate_limiter.requests_per_minute,
+            )
         self.tokenizer_backend = (
             None if tokenizer_backend in ("None", "none") else tokenizer_backend
         )
@@ -201,7 +215,7 @@ class TemplateAPI(TemplateLM):
                     import transformers
 
                     self.tokenizer = transformers.AutoTokenizer.from_pretrained(
-                        self.tokenizer if self.tokenizer else self.model,
+                        self.tokenizer or self.model,
                         trust_remote_code=trust_remote_code,
                         revision=revision,
                         use_fast=use_fast_tokenizer,
@@ -257,7 +271,7 @@ class TemplateAPI(TemplateLM):
         generate: bool = True,
         gen_kwargs: dict | None = None,
         seed: int = 1234,
-        eos: str = None,
+        eos: str | None = None,
         **kwargs,
     ) -> dict:
         """This method is responsible for creating the json payload that will be sent to the API."""
@@ -297,8 +311,8 @@ class TemplateAPI(TemplateLM):
     @abc.abstractmethod
     def parse_logprobs(
         outputs: Any | list[Any],
-        tokens: list[list[int]] = None,
-        ctxlen: list[int] = None,
+        tokens: list[list[int]] | None = None,
+        ctxlen: list[int] | None = None,
         **kwargs,
     ) -> list[tuple[float, bool]]:
         """Method used to parse the logprobs from the (batched) API response. This method should return a list of tuples"""
@@ -397,7 +411,7 @@ class TemplateAPI(TemplateLM):
     def tok_encode(
         self,
         string: str,
-        left_truncate_len: int = None,
+        left_truncate_len: int | None = None,
         add_special_tokens: bool = False,
         truncation: bool = False,
         **kwargs,
@@ -439,7 +453,7 @@ class TemplateAPI(TemplateLM):
         else:
             try:
                 encoding = self.tokenizer.encode(string)
-            except Exception:
+            except (TypeError, ValueError):
                 encoding = self.tokenizer.encode_batch(string)
             return encoding
 
@@ -462,6 +476,8 @@ class TemplateAPI(TemplateLM):
         # !!! Copy: shared dict for each request, need new object !!!
         gen_kwargs = copy.deepcopy(gen_kwargs)
         try:
+            if self._rate_limiter is not None:
+                self._rate_limiter.acquire()
             response = requests.post(
                 self.base_url,
                 json=self._create_payload(
@@ -495,7 +511,7 @@ class TemplateAPI(TemplateLM):
         messages: list[list[int]] | list[str] | list[JsonChatStr],
         *,
         generate: bool = True,
-        cache_keys: list = None,
+        cache_keys: list | None = None,
         ctxlens: list[int] | None = None,
         gen_kwargs: dict | None = None,
         **kwargs,
@@ -513,6 +529,8 @@ class TemplateAPI(TemplateLM):
         acquired = await sem.acquire()
         outputs = None
         try:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.acquire_async()
             async with session.post(
                 self.base_url,
                 json=payload,
@@ -556,8 +574,10 @@ class TemplateAPI(TemplateLM):
             return answers
         # If the retries also fail
         except BaseException as e:
-            eval_logger.error(f"Exception:{repr(e)}, {locals().get('outputs', '(no outputs)')}, retrying.")
-            raise e
+            eval_logger.error(
+                f"Exception:{e!r}, {locals().get('outputs', '(no outputs)')}, retrying."
+            )
+            raise
         finally:
             if acquired:
                 sem.release()
@@ -591,10 +611,10 @@ class TemplateAPI(TemplateLM):
         cache_keys: list,
         *,
         generate: bool = True,
-        ctxlens: list[int] = None,
+        ctxlens: list[int] | None = None,
         **kwargs,
     ) -> list[list[str]] | list[list[tuple[float, bool]]]:
-        ctxlens = ctxlens if ctxlens else [None] * len(requests)
+        ctxlens = ctxlens or [None] * len(requests)
         conn = TCPConnector(limit=self._concurrent, ssl=self.verify_certificate)
         sem = asyncio.Semaphore(self._concurrent)
         async with ClientSession(
@@ -841,8 +861,7 @@ class TemplateAPI(TemplateLM):
                     )
                 )
                 # Append results to res list
-                for r in results:
-                    res.append(r)
+                res.extend(results)
 
         return re_ord.get_original(res)
 

@@ -10,6 +10,7 @@ The `TemplateAPI` class provides a template for creating API-based model impleme
 - Batch processing
 - Caching
 - Retrying failed requests
+- Request-rate limiting
 - Parsing API responses
 
 To use this class, you typically need to subclass it and implement specific methods for your API.
@@ -51,6 +52,11 @@ When initializing a `TemplateAPI` instance or a subclass, you can provide severa
   - Number of concurrent requests to make to the API.
   - Useful for APIs that support parallel processing.
   - Default is 1 (sequential processing).
+
+- `requests_per_minute` (float, optional):
+  - Maximum number of HTTP request starts per minute. Requests are evenly spaced and retries consume request slots.
+  - By default the limiter is process-local. Set `LM_EVAL_RATE_LIMIT_STATE_DIR` to a shared-filesystem directory to coordinate the same endpoint/model budget across processes or cluster nodes.
+  - Unset by default (no rate limit).
 
 - `timeout` (int, optional):
   - Timeout for API requests in seconds.
@@ -115,6 +121,7 @@ class MyAPIModel(TemplateAPI):
             base_url="https://api.mymodel.com/v1/completions",
             tokenizer_backend="huggingface",
             num_concurrent=5,
+            requests_per_minute=30,
             max_retries=5,
             batch_size=10,
             **kwargs

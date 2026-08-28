@@ -59,7 +59,7 @@ class LocalCompletionsAPI(TemplateAPI):
         )
 
     def apply_chat_template(
-        self, chat_history: List[Dict[str, str]], add_generation_prompt: bool = True
+        self, chat_history: list[dict[str, str]], add_generation_prompt: bool = True
     ):
         # The /v1/completions endpoint takes a flat string prompt, never a
         # messages array -- so whenever a local HF tokenizer is available we
@@ -127,8 +127,8 @@ class LocalCompletionsAPI(TemplateAPI):
     @staticmethod
     def parse_logprobs(
         outputs: dict | list[dict],
-        tokens: list[list[int]] = None,
-        ctxlens: list[int] = None,
+        tokens: list[list[int]] | None = None,
+        ctxlens: list[int] | None = None,
         **kwargs,
     ) -> list[tuple[float, bool]]:
         res = []
@@ -202,7 +202,7 @@ class LocalChatCompletion(LocalCompletionsAPI):
             self._batch_size = 1
 
     def apply_chat_template(
-        self, chat_history: List[Dict[str, str]], add_generation_prompt: bool = True
+        self, chat_history: list[dict[str, str]], add_generation_prompt: bool = True
     ):
         # Always needs list[dict] messages (see _create_payload's assert
         # below) -- never take LocalCompletionsAPI's plain-string override,
@@ -215,7 +215,7 @@ class LocalChatCompletion(LocalCompletionsAPI):
         self,
         messages: list[dict],
         generate=False,
-        gen_kwargs: dict = None,
+        gen_kwargs: dict | None = None,
         seed=1234,
         eos=None,
         **kwargs,
@@ -256,7 +256,7 @@ class LocalChatCompletion(LocalCompletionsAPI):
                 tmp = [None] * len(out["choices"])
                 for choices in out["choices"]:
                     tmp[choices["index"]] = choices["message"]["content"]
-            except Exception as e:
+            except (IndexError, KeyError, TypeError) as e:
                 # account for cases that generation is blocked by content filter,
                 # which is common for Azure OpenAI Service,
                 # not sure if need to account for multiple choices
@@ -357,7 +357,7 @@ class OpenAIChatCompletion(LocalChatCompletion):
         self,
         messages: list[dict],
         generate=False,
-        gen_kwargs: dict = None,
+        gen_kwargs: dict | None = None,
         seed=1234,
         eos="<|endoftext|>",
         **kwargs,
@@ -406,9 +406,9 @@ class AzureOpenaiChatCompletionsLM(OpenAIChatCompletion):
     ) -> None:
         super().__init__()
         try:
-            import openai  # noqa: E401
+            import openai
         except ModuleNotFoundError as e:
-            raise Exception(
+            raise ModuleNotFoundError(
                 "attempted to use 'openai' LM type, but package `openai` or `tiktoken` are not installed. \
     please install these via `pip install lm-eval[openai]` or `pip install -e .[openai]`",
             ) from e

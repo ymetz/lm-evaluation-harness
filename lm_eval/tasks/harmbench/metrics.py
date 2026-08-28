@@ -15,6 +15,8 @@ from spacy.cli import download
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 # Load spaCy model
 try:
@@ -54,6 +56,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=1, max_retries=6):
                 "max_tokens": max_tokens,
             }
 
+            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,
@@ -66,7 +69,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=1, max_retries=6):
                 return data["choices"][0]["message"]["content"]
 
             # print(f"Attempt {attempt + 1}/{max_retries}: status {resp.status_code}: {resp.text}")
-        except Exception:  # noqa: S110
+        except Exception:  # noqa: BLE001, S110
             pass
 
         if attempt < max_retries - 1:

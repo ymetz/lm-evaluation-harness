@@ -20,8 +20,12 @@ import logging
 import os
 import re
 import tempfile
+from contextlib import ExitStack, contextmanager
+from functools import wraps
 
 import yaml
+
+from lm_eval.api.rate_limiter import get_judge_rate_limiter
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,38 @@ JUDGE_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 
 # Name for the annotator config (written into alpaca_eval's evaluators_configs/)
 ANNOTATOR_NAME = "cscs_llama3_70b"
+
+
+@contextmanager
+def _rate_limited_openai_resources():
+    """Rate limit every OpenAI SDK call made inside AlpacaEval, including retries."""
+
+    limiter = get_judge_rate_limiter(f"{API_URL}:{JUDGE_MODEL}")
+    if limiter is None:
+        yield
+        return
+
+    from unittest.mock import patch
+
+    from openai.resources.chat.completions import Completions as ChatCompletions
+    from openai.resources.completions import Completions
+
+    with ExitStack() as stack:
+        for resource_class in (ChatCompletions, Completions):
+            original_create = resource_class.create
+
+            @wraps(original_create)
+            def rate_limited_create(
+                self, *args, _original_create=original_create, **kwargs
+            ):
+                limiter.acquire()
+                return _original_create(self, *args, **kwargs)
+
+            stack.enter_context(
+                patch.object(resource_class, "create", rate_limited_create)
+            )
+        yield
+
 
 # Annotator configuration matching the weighted AlpacaEval protocol:
 # logprob-based classification with a single-token output (m or M).
@@ -226,8 +262,8 @@ def alpaca_eval_agg(items):
         "client_kwargs": {"max_retries": 15},
     }
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        df_leaderboard, annotations = evaluate(
+    with tempfile.TemporaryDirectory() as tmpdir, _rate_limited_openai_resources():
+        df_leaderboard, _annotations = evaluate(
             model_outputs=model_outputs,
             reference_outputs=reference_outputs,
             annotators_config=annotator_name,

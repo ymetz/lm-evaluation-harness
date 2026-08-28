@@ -6,6 +6,8 @@ import time
 import requests
 import torch
 
+from lm_eval.api.rate_limiter import acquire_judge_rate_limit
+
 
 API_URL = "https://api.swissai.svc.cscs.ch/v1"
 API_KEY = os.getenv("CSCS_SERVING_API")
@@ -34,6 +36,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=20)
                 "chat_template_kwargs": {"enable_thinking": False},
             }
 
+            acquire_judge_rate_limit(f"{API_URL}:{MODEL_NAME}")
             resp = requests.post(
                 f"{API_URL}/chat/completions",
                 headers=headers,
@@ -49,7 +52,7 @@ def try_remote_generate(prompt, temperature=0.0, max_tokens=512, max_retries=20)
                 f"Attempt {attempt + 1}/{max_retries}: status {resp.status_code}: {resp.text}"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"Attempt {attempt + 1}/{max_retries}: {e}")
 
         if attempt < max_retries - 1:
@@ -186,11 +189,13 @@ def generate_batch(
 
 def jsonify_ans_longwiki(raw_responses, eval_prompts, model, tokenizer, key):
     def check_validity(gen):
-        g = "".join(gen.lower().split())  # drop all whitespace; matches ": true" and ```json fences
-        if '{{"{}":false}}'.format(key) in g:
-            return '{{"{}":false}}'.format(key)
-        elif '{{"{}":true}}'.format(key) in g:
-            return '{{"{}":true}}'.format(key)
+        g = "".join(
+            gen.lower().split()
+        )  # drop all whitespace; matches ": true" and ```json fences
+        if f'{{"{key}":false}}' in g:
+            return f'{{"{key}":false}}'
+        elif f'{{"{key}":true}}' in g:
+            return f'{{"{key}":true}}'
         else:
             return -1
 
@@ -203,7 +208,7 @@ def jsonify_ans_longwiki(raw_responses, eval_prompts, model, tokenizer, key):
             r = r.split("\n")[0]
             try:
                 jsonifyed_res.append(json.loads(r))
-            except Exception:
+            except json.JSONDecodeError:
                 error = True
                 error_count = 0
 
@@ -224,7 +229,7 @@ def jsonify_ans_longwiki(raw_responses, eval_prompts, model, tokenizer, key):
                             json_res = json.loads(re_eval)
                         error = False
 
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         error = True
                     error_count += 1
 
@@ -306,11 +311,13 @@ def jsonify_ans(
     raw_response: list[str], eval_prompt: list[str], key: str, model, tokenizer
 ):
     def check_validity(gen):
-        gen_nospace = "".join(gen.lower().split())  # drop all whitespace + lowercase; handles ": true", newlines, ```json fences
-        if '{{"{}":false}}'.format(key) in gen_nospace:
-            return '{{"{}":false}}'.format(key)
-        elif '{{"{}":true}}'.format(key) in gen_nospace:
-            return '{{"{}":true}}'.format(key)
+        gen_nospace = "".join(
+            gen.lower().split()
+        )  # drop all whitespace + lowercase; handles ": true", newlines, ```json fences
+        if f'{{"{key}":false}}' in gen_nospace:
+            return f'{{"{key}":false}}'
+        elif f'{{"{key}":true}}' in gen_nospace:
+            return f'{{"{key}":true}}'
         else:
             return -1
 
@@ -323,7 +330,7 @@ def jsonify_ans(
         raw_response = raw_response.split("\n")[0]
         try:
             jsonifyed_res.append(json.loads(raw_response))
-        except Exception:
+        except json.JSONDecodeError:
             error = True
             error_count = 0
 
@@ -337,7 +344,7 @@ def jsonify_ans(
                         json_res = json.loads(re_eval.split("\n")[0])
                     error = False
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     print(f"Error occurred: {e}")
                     error = True
                 error_count += 1
